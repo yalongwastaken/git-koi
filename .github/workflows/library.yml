@@ -1,0 +1,27 @@
+name: Koi library
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Generate library
+        run: cargo +stable run --locked --example generate-library -- library
+      - name: Attach library
+        uses: actions/upload-artifact@v7
+        with:
+          name: koi-library
+          path: library/
+          if-no-files-found: error

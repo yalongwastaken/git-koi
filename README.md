@@ -15,6 +15,7 @@ GitHub contribution history and repository language shares.
 ├── Cargo.toml
 ├── LICENSE
 ├── README.md
+├── examples/
 ├── src/
 └── tests/
 ```
@@ -101,6 +102,61 @@ The model contains measurements, not pixels, growth thresholds, or fade
 durations. See [the development contract](src/koi.rs) and exercise its public
 interface with `cargo test --offline --locked --test koi`.
 
+### Base Koi Rendering
+
+`render::render_base_koi` draws a slim koi with a pale Classic coat, colored
+outlines, and dithered shading into a transparent pixel frame. The body and fins
+follow sampled curves, with shading that follows the body surface and fin rays
+that follow each fin’s direction. The head widens from a round nose along a
+gentle slant, and short pixel whiskers angle forward from the snout.
+Contribution totals determine its size through `koi::calculate_growth_fraction`;
+growth slows as the fish matures. Young koi have a rounder head, larger eyes, a
+slimmer body, and short rounded fins, and grow into the adult shape by the
+young-shape reference point. After the adult reference point, the body keeps
+lengthening, broadens slightly, and its fins and tail lengthen. The maximum form
+retains its anatomy at higher totals. Growth reference points live in
+`src/koi.rs`, and anatomical proportions live in `src/render.rs`. Quiet days
+alone do not change its base anatomy. The pose and framing account for the body
+and fins.
+
+Every growth level shares a square native canvas. `output::encode_png` exports
+it with exact 2x pixel scaling, preserving crisp edges and transparency.
+`output::encode_svg` returns a self-contained vector document of the same pixels
+at the same display size. The SVG uses native pixel coordinates and groups
+neighboring equal pixels into row rectangles. Canvas dimensions live in
+`src/render.rs`; static export dimensions derive from them in `src/output.rs`.
+
+Rendering and encoding are deterministic and leave file access and publication
+to the caller. This base renderer does not paint language or streak markings.
+
+Exercise the rendering and encoding boundary with
+`cargo test --offline --locked --test render`.
+
+### Koi Library
+
+The generated library shows the supported coats across growth samples, with
+transparent PNG/SVG pairs and light and dark comparison sheets.
+`render::render_patterned_koi` draws an explicitly selected `coat::CoatPattern`
+using the base renderer's anatomy and lighting. The account seed shapes patch
+edges; growth preserves their body-relative positions. Language and streak
+mapping remain separate from coat selection.
+
+Generate the library from the repository root, then open `library/README.md`.
+Git ignores the generated files.
+
+```sh
+cargo run --offline --locked --example generate-library -- library
+```
+
+The example owns the sample selection and growth totals. It uses a synthetic
+account fixture and the production renderer and encoders. Generation replaces
+matching files; it does not remove other files. Rerun after an interrupted
+generation to repair a partial set.
+
+For each pull request and push to `main`, the library workflow generates a fresh
+library and attaches it to the run as the `koi-library` artifact. Download it
+from the run's summary page to review rendering changes.
+
 ### Manual Checks
 
 ```sh
@@ -108,7 +164,7 @@ cargo fmt --all -- --check
 cargo clippy --offline --locked --all-targets -- -D warnings
 cargo test --offline --locked
 cargo build --release --offline --locked
-npx prettier@3.9.10 --check README.md .prettierrc.json 'tests/fixtures/*.json'
+npx prettier@3.9.10 --check README.md .prettierrc.json 'tests/fixtures/*.json' .github/workflows/library.yml
 ```
 
 `--locked` prevents changes to `Cargo.lock`; `--offline` prevents Cargo from

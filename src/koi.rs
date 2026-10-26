@@ -69,6 +69,15 @@ pub fn derive_koi_development(
     })
 }
 
+/// Map total contributions to a bounded growth fraction with diminishing gains.
+/// The caller supplies the observed total; elapsed time does not affect growth.
+pub fn calculate_growth_fraction(total_contributions: u64) -> f64 {
+    const CONTRIBUTION_SCALE: f64 = 50.0;
+    const DOUBLINGS_TO_FULL_SIZE: f64 = 8.0;
+    ((1.0 + total_contributions as f64 / CONTRIBUTION_SCALE).log2() / DOUBLINGS_TO_FULL_SIZE)
+        .min(1.0)
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum KoiDevelopmentError {
     ContributionHistory(ContributionHistoryError),
