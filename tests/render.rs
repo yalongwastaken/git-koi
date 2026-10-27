@@ -356,10 +356,15 @@ fn growth_slows_and_keeps_the_whole_fish_inside_a_transparent_frame() {
 #[test]
 fn swimming_keeps_the_whole_fish_inside_the_frame() {
     let mut koi_development = develop_with_languages(0, FOUR_LANGUAGE_MIX);
-    for behavior in [Behavior::Cruise, Behavior::Dart] {
+    for behavior in [
+        Behavior::Cruise,
+        Behavior::Dart,
+        Behavior::Rest,
+        Behavior::DeepRest,
+    ] {
         for contribution_total in [0, 1_500, ADULT_CONTRIBUTIONS, MAX_GROWTH_CONTRIBUTIONS] {
             koi_development.total_contributions = contribution_total;
-            for frame_index in (0..frame_count(behavior)).step_by(8) {
+            for frame_index in (0..frame_count(behavior)).step_by(10) {
                 let opaque_bounds = measure_opaque_bounds(&render_swim_frame(
                     &koi_development,
                     KoiBody::default(),
@@ -377,6 +382,38 @@ fn swimming_keeps_the_whole_fish_inside_the_frame() {
             }
         }
     }
+}
+
+#[test]
+fn deeper_rest_turns_the_koi_toward_water_blue() {
+    let koi_development = develop_with_languages(ADULT_CONTRIBUTIONS, FOUR_LANGUAGE_MIX);
+    let measure_blue_lean = |behavior| {
+        let swim_frame = render_swim_frame(&koi_development, KoiBody::default(), behavior, 0);
+        let opaque_pixels: Vec<_> = swim_frame
+            .as_rgba_bytes()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel_channels| pixel_channels[3] != 0)
+            .copied()
+            .collect();
+        opaque_pixels
+            .iter()
+            .map(|pixel_channels| f64::from(pixel_channels[2]) - f64::from(pixel_channels[0]))
+            .sum::<f64>()
+            / opaque_pixels.len() as f64
+    };
+    let cruise_lean = measure_blue_lean(Behavior::Cruise);
+    let rest_lean = measure_blue_lean(Behavior::Rest);
+    let deep_rest_lean = measure_blue_lean(Behavior::DeepRest);
+    assert!(
+        rest_lean > cruise_lean + 10.0,
+        "{cruise_lean} then {rest_lean}"
+    );
+    assert!(
+        deep_rest_lean > rest_lean + 10.0,
+        "{rest_lean} then {deep_rest_lean}"
+    );
 }
 
 #[test]

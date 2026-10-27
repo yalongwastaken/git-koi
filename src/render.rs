@@ -8,7 +8,7 @@ use crate::coat::{KoiBody, KoiCoat, WHITE_RAMP};
 use crate::koi::{
     ADULT_CONTRIBUTIONS, KoiDevelopment, YOUNG_SHAPE_CONTRIBUTIONS, calculate_growth_fraction,
 };
-use crate::motion::{STILL_POSE, SwimPose, calculate_swim_pose};
+use crate::motion::{Course, STILL_POSE, SwimPose, calculate_swim_pose, frame_count};
 
 pub const FRAME_WIDTH_PIXELS: u32 = 256;
 pub const FRAME_HEIGHT_PIXELS: u32 = FRAME_WIDTH_PIXELS;
@@ -37,18 +37,19 @@ pub fn render_koi(koi_development: &KoiDevelopment, koi_body: KoiBody) -> KoiFra
         koi_development,
         koi_body,
         &koi_anatomy,
-        SpinePath::Still,
         &STILL_POSE,
+        Framing::CenterOnKoi,
     )
 }
 
-/// Render one frame of a behavior's seamless loop, colored like `render_koi`. The koi
-/// swims clockwise laps around the frame center with a body wave that beats and
-/// glides; frame numbers wrap around the loop of `motion::frame_count(behavior)`
-/// frames. The view stays on the lap center, and longer koi swim a tighter lap so
-/// every size fits. The fins and whiskers move with the stroke, as `motion::SwimPose`
-/// describes. Identical inputs produce identical pixels without I/O, clock reads, or
-/// input mutation.
+/// Render one frame of a behavior's seamless loop, colored like `render_koi`, in the
+/// pose `motion::calculate_swim_pose` gives; frame numbers wrap around the loop of
+/// `motion::frame_count(behavior)` frames. Laps circle the frame center, and longer
+/// koi swim a tighter lap so every size fits. A hovering loop is framed once, centered
+/// on the koi's sweep, and its drift shrinks only as far as the largest koi need to
+/// stay inside. The view never follows the fins, so it never shakes. Under water the koi
+/// turns toward water blue and partly drops out, more with depth. Identical inputs
+/// produce identical pixels without I/O, clock reads, or input mutation.
 pub fn render_swim_frame(
     koi_development: &KoiDevelopment,
     koi_body: KoiBody,
@@ -56,37 +57,124 @@ pub fn render_swim_frame(
     frame_index: u32,
 ) -> KoiFrame {
     let koi_anatomy = calculate_anatomy(koi_development.total_contributions);
-    let spine_path = SpinePath::Lap {
-        radius_pixels: calculate_lap_radius(koi_anatomy.body_length_pixels),
+    let swim_pose = calculate_swim_pose(behavior, frame_index);
+    let pose_center = match swim_pose.course {
+        Course::Lap { .. } => [0.0, 0.0],
+        Course::Hover { drift_pixels, .. } => {
+            let hover_fit = fit_hover_loop(behavior, &koi_anatomy);
+            [0, 1].map(|axis_index| {
+                hover_fit.sweep_center[axis_index]
+                    - hover_fit.drift_scales[axis_index] * drift_pixels[axis_index]
+            })
+        }
     };
     render_pose(
         koi_development,
         koi_body,
         &koi_anatomy,
-        spine_path,
-        &calculate_swim_pose(behavior, frame_index),
+        &swim_pose,
+        Framing::At(pose_center),
     )
+}
+
+/// Where the view is centered: on the koi itself for the still image, or at a point
+/// fixed for the whole loop.
+enum Framing {
+    CenterOnKoi,
+    At([f64; 2]),
+}
+
+/// One framing for a whole hovering loop.
+struct HoverFit {
+    sweep_center: [f64; 2],
+    /// Shares of the pose's drift that keep every frame inside, from zero through one.
+    drift_scales: [f64; 2],
+}
+
+/// Center a hovering loop on everything the koi covers across its frames, then shrink
+/// the drift on each axis only as far as needed to keep every frame inside the frame.
+fn fit_hover_loop(behavior: Behavior, koi_anatomy: &KoiAnatomy) -> HoverFit {
+    // Room for the outline, a clear pixel at the frame edge, and rounding.
+    const FIT_MARGIN_PIXELS: f64 = 2.5;
+    let frame_bounds: Vec<([[f64; 2]; 2], [f64; 2])> = (0..frame_count(behavior))
+        .map(|frame_index| {
+            let swim_pose = calculate_swim_pose(behavior, frame_index);
+            let body_spine = build_spine(koi_anatomy, &swim_pose);
+            let fin_curves = build_fins(&body_spine, koi_anatomy, &swim_pose);
+            let [mut min_corner, mut max_corner] = measure_curve_bounds(&body_spine, &fin_curves);
+            // A whisker point covers the pixel to its right and below.
+            for whisker_point in
+                calculate_whisker_points(&body_spine, koi_anatomy, swim_pose.whisker_sway_radians)
+            {
+                for axis_index in 0..2 {
+                    min_corner[axis_index] = min_corner[axis_index].min(whisker_point[axis_index]);
+                    max_corner[axis_index] =
+                        max_corner[axis_index].max(whisker_point[axis_index] + 1.0);
+                }
+            }
+            let drift_pixels = match swim_pose.course {
+                Course::Hover { drift_pixels, .. } => drift_pixels,
+                Course::Lap { .. } => [0.0; 2],
+            };
+            ([min_corner, max_corner], drift_pixels)
+        })
+        .collect();
+    let frame_sizes = [
+        f64::from(FRAME_WIDTH_PIXELS),
+        f64::from(FRAME_HEIGHT_PIXELS),
+    ];
+    let mut hover_fit = HoverFit {
+        sweep_center: [0.0; 2],
+        drift_scales: [1.0; 2],
+    };
+    for axis_index in 0..2 {
+        let sweep_min = frame_bounds
+            .iter()
+            .map(|(bounds, _)| bounds[0][axis_index])
+            .fold(f64::INFINITY, f64::min);
+        let sweep_max = frame_bounds
+            .iter()
+            .map(|(bounds, _)| bounds[1][axis_index])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let sweep_center = (sweep_min + sweep_max) / 2.0;
+        let frame_half = frame_sizes[axis_index] / 2.0;
+        let mut drift_scale: f64 = 1.0;
+        for (bounds, drift_pixels) in &frame_bounds {
+            let drift = drift_pixels[axis_index];
+            let room = if drift > 0.0 {
+                frame_half - FIT_MARGIN_PIXELS - (bounds[1][axis_index] - sweep_center)
+            } else {
+                frame_half - FIT_MARGIN_PIXELS + (bounds[0][axis_index] - sweep_center)
+            };
+            if drift != 0.0 {
+                drift_scale = drift_scale.min(room / drift.abs());
+            }
+        }
+        hover_fit.sweep_center[axis_index] = sweep_center;
+        hover_fit.drift_scales[axis_index] = drift_scale.clamp(0.0, 1.0);
+    }
+    hover_fit
 }
 
 fn render_pose(
     koi_development: &KoiDevelopment,
     koi_body: KoiBody,
     koi_anatomy: &KoiAnatomy,
-    spine_path: SpinePath,
     swim_pose: &SwimPose,
+    framing: Framing,
 ) -> KoiFrame {
     let koi_coat = KoiCoat::new(koi_development, koi_body, |along_fraction| {
         calculate_body_half_width(along_fraction, koi_anatomy)
     });
-    let body_spine = build_spine(koi_anatomy, spine_path, swim_pose);
+    let body_spine = build_spine(koi_anatomy, swim_pose);
     let fin_curves = build_fins(&body_spine, koi_anatomy, swim_pose);
     let [min_corner, max_corner] = measure_curve_bounds(&body_spine, &fin_curves);
-    let pose_center = match spine_path {
-        SpinePath::Still => [
+    let pose_center = match framing {
+        Framing::CenterOnKoi => [
             (min_corner[0] + max_corner[0]) / 2.0,
             (min_corner[1] + max_corner[1]) / 2.0,
         ],
-        SpinePath::Lap { .. } => [0.0, 0.0],
+        Framing::At(pose_center) => pose_center,
     };
     let koi_appearance = KoiAppearance {
         koi_anatomy,
@@ -117,15 +205,77 @@ fn render_pose(
             });
         }
     }
-    paint_whiskers(
-        &mut rgba_pixels,
-        &body_spine,
-        koi_anatomy,
-        pose_center,
-        swim_pose.whisker_sway_radians,
-    );
+    let fish_pixel_mask: Vec<bool> = rgba_pixels
+        .iter()
+        .map(|pixel_channels| pixel_channels[3] != 0)
+        .collect();
+    let whisker_points =
+        calculate_whisker_points(&body_spine, koi_anatomy, swim_pose.whisker_sway_radians);
+    paint_whiskers(&mut rgba_pixels, &whisker_points, pose_center);
     paint_outline(&mut rgba_pixels);
+    if swim_pose.depth > 0.0 {
+        paint_depth(&mut rgba_pixels, &fish_pixel_mask, swim_pose.depth);
+    }
     KoiFrame { rgba_pixels }
+}
+
+/// Under water the koi becomes a blue koi: each body and fin pixel maps its own
+/// brightness onto a water-blue scale, the whiskers and outline soften to deep blue,
+/// and a dithered share of each drops out, more for the outline.
+fn paint_depth(rgba_pixels: &mut [[u8; 4]], fish_pixel_mask: &[bool], depth: f64) {
+    const DEEP_WATER: [f64; 3] = [18.0, 78.0, 137.0];
+    const MID_WATER: [f64; 3] = [0.0, 153.0, 219.0];
+    const SHALLOW_WATER: [f64; 3] = [190.0, 225.0, 245.0];
+    const OUTLINE_WATER: [f64; 3] = [24.0, 48.0, 92.0];
+    const FISH_DROPOUT_PER_DEPTH: f64 = 0.15;
+    const OUTLINE_DROPOUT_PER_DEPTH: f64 = 0.45;
+    const TINT_PER_DEPTH: f64 = 1.15;
+    let tint = (depth * TINT_PER_DEPTH).min(1.0);
+    let frame_width = FRAME_WIDTH_PIXELS as usize;
+    for (pixel_index, pixel_channels) in rgba_pixels.iter_mut().enumerate() {
+        if pixel_channels[3] == 0 {
+            continue;
+        }
+        let is_fish_pixel = fish_pixel_mask[pixel_index];
+        let dropout_per_depth = if is_fish_pixel {
+            FISH_DROPOUT_PER_DEPTH
+        } else {
+            OUTLINE_DROPOUT_PER_DEPTH
+        };
+        let pixel_position = [
+            (pixel_index % frame_width) as u32,
+            (pixel_index / frame_width) as u32,
+        ];
+        if calculate_dither_threshold(pixel_position) < depth * dropout_per_depth {
+            *pixel_channels = [0; 4];
+            continue;
+        }
+        let original_color =
+            [0, 1, 2].map(|channel_index| f64::from(pixel_channels[channel_index]));
+        let water_color = if is_fish_pixel {
+            let brightness =
+                (0.3 * original_color[0] + 0.59 * original_color[1] + 0.11 * original_color[2])
+                    / 255.0;
+            let (from_color, to_color, blend) = if brightness < 0.5 {
+                (DEEP_WATER, MID_WATER, brightness * 2.0)
+            } else {
+                (MID_WATER, SHALLOW_WATER, brightness * 2.0 - 1.0)
+            };
+            [0, 1, 2].map(|channel_index| {
+                interpolate(from_color[channel_index], to_color[channel_index], blend)
+            })
+        } else {
+            OUTLINE_WATER
+        };
+        for channel_index in 0..3 {
+            pixel_channels[channel_index] = interpolate(
+                original_color[channel_index],
+                water_color[channel_index],
+                tint,
+            )
+            .round() as u8;
+        }
+    }
 }
 
 const OUTLINE_COLOR: [u8; 4] = [24, 20, 37, 255];
@@ -146,15 +296,6 @@ struct KoiAnatomy {
     eye_along_fraction: f64,
     /// Young koi have proportionally larger eyes; adults use 1.
     eye_scale: f64,
-}
-
-#[derive(Clone, Copy)]
-enum SpinePath {
-    /// A fixed heading with a gentle bend, centered on the fish.
-    Still,
-    /// Along a clockwise circle around the frame center, head first at the pose's lap
-    /// angle.
-    Lap { radius_pixels: f64 },
 }
 
 struct KoiAppearance<'a> {
@@ -374,11 +515,9 @@ fn smooth_step(fraction: f64) -> f64 {
     fraction * fraction * (3.0 - 2.0 * fraction)
 }
 
-fn build_spine(
-    koi_anatomy: &KoiAnatomy,
-    spine_path: SpinePath,
-    swim_pose: &SwimPose,
-) -> Vec<CurvePoint> {
+/// The spine follows the pose's course: the still pose's fixed heading and gentle bend,
+/// turned by any heading offset, or a clockwise circle around the frame center.
+fn build_spine(koi_anatomy: &KoiAnatomy, swim_pose: &SwimPose) -> Vec<CurvePoint> {
     const HEADING_RADIANS: f64 = -0.08;
     const BEND_RADIANS: f64 = 0.35;
     const WAVE_AMPLITUDE_FRACTION: f64 = 0.06;
@@ -390,15 +529,20 @@ fn build_spine(
         calculate_body_half_width(point_index as f64 / point_count as f64, koi_anatomy)
             .max(MIN_HALF_WIDTH_PIXELS)
     };
-    let center_points = match spine_path {
-        SpinePath::Still => {
+    let center_points = match swim_pose.course {
+        Course::Hover {
+            heading_offset_radians,
+            ..
+        } => {
             let mut center_points = vec![CurvePoint {
                 position: [0.0, 0.0],
                 half_width_pixels: calculate_point_half_width(0),
             }];
             for point_index in 1..point_count {
-                let backward_angle_radians =
-                    HEADING_RADIANS + PI + BEND_RADIANS * point_index as f64 / point_count as f64;
+                let backward_angle_radians = HEADING_RADIANS
+                    + heading_offset_radians
+                    + PI
+                    + BEND_RADIANS * point_index as f64 / point_count as f64;
                 let [previous_x, previous_y] = center_points[point_index - 1].position;
                 center_points.push(CurvePoint {
                     position: [
@@ -411,19 +555,21 @@ fn build_spine(
             center_points
         }
         // Each body point sits one pixel of arc behind the one in front.
-        SpinePath::Lap { radius_pixels } => (0..point_count)
-            .map(|point_index| {
-                let point_angle_radians =
-                    swim_pose.lap_angle_radians - point_index as f64 / radius_pixels;
-                CurvePoint {
-                    position: [
-                        radius_pixels * point_angle_radians.cos(),
-                        radius_pixels * point_angle_radians.sin(),
-                    ],
-                    half_width_pixels: calculate_point_half_width(point_index),
-                }
-            })
-            .collect(),
+        Course::Lap { angle_radians } => {
+            let radius_pixels = calculate_lap_radius(body_length_pixels);
+            (0..point_count)
+                .map(|point_index| {
+                    let point_angle_radians = angle_radians - point_index as f64 / radius_pixels;
+                    CurvePoint {
+                        position: [
+                            radius_pixels * point_angle_radians.cos(),
+                            radius_pixels * point_angle_radians.sin(),
+                        ],
+                        half_width_pixels: calculate_point_half_width(point_index),
+                    }
+                })
+                .collect()
+        }
     };
     let mut body_spine = Vec::with_capacity(point_count);
     for (point_index, center_point) in center_points.iter().enumerate() {
@@ -544,28 +690,43 @@ fn build_fin(
     fin_points
 }
 
-/// Paint short whiskers angled forward and out from the edge of the snout, swung
-/// together by the sway. They fill only empty pixels and are painted before the
+/// Paint the whisker points. They fill only empty pixels and are painted before the
 /// outline, so they are outlined like the koi.
-fn paint_whiskers(
-    rgba_pixels: &mut [[u8; 4]],
+fn paint_whiskers(rgba_pixels: &mut [[u8; 4]], whisker_points: &[[f64; 2]], pose_center: [f64; 2]) {
+    let frame_width = FRAME_WIDTH_PIXELS as usize;
+    for whisker_point in whisker_points {
+        let pixel_x =
+            (whisker_point[0] - pose_center[0] + f64::from(FRAME_WIDTH_PIXELS) / 2.0).floor();
+        let pixel_y =
+            (whisker_point[1] - pose_center[1] + f64::from(FRAME_HEIGHT_PIXELS) / 2.0).floor();
+        if !(0.0..f64::from(FRAME_WIDTH_PIXELS)).contains(&pixel_x)
+            || !(0.0..f64::from(FRAME_HEIGHT_PIXELS)).contains(&pixel_y)
+        {
+            continue;
+        }
+        let pixel_index = pixel_y as usize * frame_width + pixel_x as usize;
+        if rgba_pixels[pixel_index][3] == 0 {
+            rgba_pixels[pixel_index] = WHITE_RAMP[1];
+        }
+    }
+}
+
+/// One point per whisker pixel: short lines angled forward and out from the edge of
+/// the snout, swung together by the sway.
+fn calculate_whisker_points(
     body_spine: &[CurvePoint],
     koi_anatomy: &KoiAnatomy,
-    pose_center: [f64; 2],
     sway_radians: f64,
-) {
+) -> Vec<[f64; 2]> {
     const SPREAD_RADIANS: f64 = 0.85;
-    const BODY_PIXELS_PER_WHISKER_PIXEL: f64 = 34.0;
     const ROOT_SIDE_FRACTION: f64 = 0.8;
     const ROOT_FORWARD_FRACTION: f64 = 0.55;
-    let whisker_length_pixels = (koi_anatomy.body_length_pixels / BODY_PIXELS_PER_WHISKER_PIXEL)
-        .round()
-        .clamp(3.0, 5.0) as u32;
+    let whisker_length_pixels = calculate_whisker_length(koi_anatomy);
     let snout_position = body_spine[0].position;
     let snout_radius_pixels = body_spine[0].half_width_pixels;
     let forward_direction = calculate_forward_direction(body_spine, 0);
     let heading_radians = forward_direction[1].atan2(forward_direction[0]);
-    let frame_width = FRAME_WIDTH_PIXELS as usize;
+    let mut whisker_points = Vec::new();
     for body_side in [-1.0, 1.0] {
         let side_offset_pixels = snout_radius_pixels * ROOT_SIDE_FRACTION * body_side;
         let forward_offset_pixels = snout_radius_pixels * ROOT_FORWARD_FRACTION;
@@ -578,25 +739,21 @@ fn paint_whiskers(
         ];
         let whisker_angle = heading_radians + sway_radians + body_side * SPREAD_RADIANS;
         for step_pixels in 1..=whisker_length_pixels {
-            let pixel_x = (root_position[0] + whisker_angle.cos() * f64::from(step_pixels)
-                - pose_center[0]
-                + f64::from(FRAME_WIDTH_PIXELS) / 2.0)
-                .floor();
-            let pixel_y = (root_position[1] + whisker_angle.sin() * f64::from(step_pixels)
-                - pose_center[1]
-                + f64::from(FRAME_HEIGHT_PIXELS) / 2.0)
-                .floor();
-            if !(0.0..f64::from(FRAME_WIDTH_PIXELS)).contains(&pixel_x)
-                || !(0.0..f64::from(FRAME_HEIGHT_PIXELS)).contains(&pixel_y)
-            {
-                continue;
-            }
-            let pixel_index = pixel_y as usize * frame_width + pixel_x as usize;
-            if rgba_pixels[pixel_index][3] == 0 {
-                rgba_pixels[pixel_index] = WHITE_RAMP[1];
-            }
+            whisker_points.push([
+                root_position[0] + whisker_angle.cos() * f64::from(step_pixels),
+                root_position[1] + whisker_angle.sin() * f64::from(step_pixels),
+            ]);
         }
     }
+    whisker_points
+}
+
+/// Whiskers grow with the koi, from three to five pixels.
+fn calculate_whisker_length(koi_anatomy: &KoiAnatomy) -> u32 {
+    const BODY_PIXELS_PER_WHISKER_PIXEL: f64 = 34.0;
+    (koi_anatomy.body_length_pixels / BODY_PIXELS_PER_WHISKER_PIXEL)
+        .round()
+        .clamp(3.0, 5.0) as u32
 }
 
 /// The lap circle's radius: as wide as the frame allows, tighter for longer koi so the

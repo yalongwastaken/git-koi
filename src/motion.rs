@@ -16,6 +16,11 @@ const PELVIC_SHARE_OF_SIDE_FIN_OPENING: f64 = 0.5;
 const WHISKER_SWAY_RADIANS: f64 = 0.15;
 const WHISKER_SWAY_LAG_RADIANS: f64 = 0.6;
 
+const REST_FRAME_COUNT: u32 = 90;
+const REST_DEPTH: f64 = 0.22;
+const DEEP_REST_FRAME_COUNT: u32 = 120;
+const DEEP_REST_DEPTH: f64 = 0.5;
+
 /// The numbers behind one kind of lap swimming. Each loop holds whole numbers of
 /// laps, strokes, waves, and sculls, so it closes seamlessly.
 struct LapStyle {
@@ -105,13 +110,26 @@ const DART_STYLE: LapStyle = LapStyle {
     scull_phase_radians: 0.0,
 };
 
+/// Where the koi swims in a frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Course {
+    /// Clockwise around the frame center. The head's angle is measured clockwise on
+    /// screen from the right; loops start with the head at the top.
+    Lap { angle_radians: f64 },
+    /// In place, in the still pose turned by the heading offset and moved by the drift.
+    Hover {
+        heading_offset_radians: f64,
+        drift_pixels: [f64; 2],
+    },
+}
+
 /// How the koi's body and fins look in one frame. Paired values list the left fin,
 /// then the right, as the koi sees them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwimPose {
-    /// The head's angle around the lap center, measured clockwise on screen from the
-    /// right; the loop starts with the head at the top.
-    pub lap_angle_radians: f64,
+    pub course: Course,
+    /// How far under the water the koi is, from zero at the surface to one.
+    pub depth: f64,
     pub wave_phase_radians: f64,
     /// Multiplies the still pose's wave amplitude.
     pub wave_strength: f64,
@@ -130,10 +148,14 @@ pub struct SwimPose {
     pub whisker_sway_radians: f64,
 }
 
-/// The still image's gentle wave with resting fins. The still image does not follow
-/// the lap, so its lap angle is unused.
+/// The still image: hovering at the surface without turning or drifting, with the
+/// gentle wave and resting fins.
 pub(crate) const STILL_POSE: SwimPose = SwimPose {
-    lap_angle_radians: 0.0,
+    course: Course::Hover {
+        heading_offset_radians: 0.0,
+        drift_pixels: [0.0; 2],
+    },
+    depth: 0.0,
     wave_phase_radians: 0.8,
     wave_strength: 1.0,
     tail_lobe_bends_radians: [0.0; 2],
@@ -146,69 +168,174 @@ pub(crate) const STILL_POSE: SwimPose = SwimPose {
 
 /// Frames in a behavior's loop at FRAMES_PER_SECOND.
 pub fn frame_count(behavior: Behavior) -> u32 {
-    select_lap_style(behavior).loop_frame_count
+    match behavior {
+        Behavior::Cruise => CRUISE_STYLE.loop_frame_count,
+        Behavior::Dart => DART_STYLE.loop_frame_count,
+        Behavior::Rest => REST_FRAME_COUNT,
+        Behavior::DeepRest => DEEP_REST_FRAME_COUNT,
+    }
 }
 
 /// The pose for a frame of a behavior's loop; frame numbers wrap around the loop, so
 /// frame `frame_count(behavior)` is frame zero again.
 ///
-/// Strokes, each a beat and a glide, drive clockwise laps. The koi speeds up a little
-/// after each stroke and coasts through the glide; lap speeds are rescaled so the loop
-/// covers exactly its laps. The tail lobes bend behind the wave and fan open on each
-/// stroke. Cruising side fins brake open on the glide; darting side fins tuck through
-/// each burst and spread through the glide. Either way they scull in opposite
-/// directions and flare on the inside of the turn, with their tips trailing. The
-/// pelvic fins follow at half the opening, and the whiskers sway.
+/// Cruising and darting swim clockwise laps driven by strokes, each a beat and a
+/// glide. The koi speeds up a little after each stroke and coasts through the glide;
+/// lap speeds are rescaled so the loop covers exactly its laps. Cruising side fins
+/// brake open on the glide; darting side fins tuck through each burst and spread
+/// through the glide. Resting hovers a little deeper with a slow beat and glide and
+/// sculling fins; deep rest hovers lower still, barely moving, with one fin flick per
+/// loop. In every behavior the tail lobes bend behind the wave, the side fins' tips
+/// trail their roots, the pelvic fins follow at half the opening, and the whiskers
+/// sway.
 pub fn calculate_swim_pose(behavior: Behavior, frame_index: u32) -> SwimPose {
-    let lap_style = select_lap_style(behavior);
-    let loop_frame = frame_index % lap_style.loop_frame_count;
-    let lap_speeds: Vec<f64> = (0..lap_style.loop_frame_count)
-        .map(|speed_frame| {
-            lap_style.glide_speed
-                + lap_style.stroke_speed_gain
-                    * lap_style
-                        .calculate_stroke(f64::from(speed_frame) - lap_style.speed_lag_frames)
-        })
-        .collect();
-    let total_speed: f64 = lap_speeds.iter().sum();
-    let covered_speed: f64 = lap_speeds[..loop_frame as usize].iter().sum();
-    let stroke = lap_style.calculate_stroke(f64::from(loop_frame));
-    let wave_phase_radians =
-        STILL_POSE.wave_phase_radians + f64::from(loop_frame) * TAU / lap_style.wave_frame_count;
-    let wave_strength = lap_style.glide_wave_strength + lap_style.stroke_wave_gain * stroke;
-    let tail_bend = TAIL_BEND_PER_WAVE_STRENGTH
-        * wave_strength
-        * (wave_phase_radians - TAIL_BEND_LAG_RADIANS).sin();
-    let tail_split = TAIL_SPLIT_RADIANS * (wave_phase_radians - TAIL_SPLIT_LAG_RADIANS).sin();
-    let side_fin_openings = lap_style.calculate_side_fin_openings(loop_frame);
-    let trailing_openings = lap_style.calculate_side_fin_openings(
-        (loop_frame + lap_style.loop_frame_count - SIDE_FIN_TRAIL_FRAMES)
-            % lap_style.loop_frame_count,
+    let loop_frame_count = frame_count(behavior);
+    let loop_frame = frame_index % loop_frame_count;
+    let drive = calculate_drive(behavior, loop_frame);
+    let trailing_drive = calculate_drive(
+        behavior,
+        (loop_frame + loop_frame_count - SIDE_FIN_TRAIL_FRAMES) % loop_frame_count,
     );
+    let tail_bend = TAIL_BEND_PER_WAVE_STRENGTH
+        * drive.wave_strength
+        * (drive.wave_phase_radians - TAIL_BEND_LAG_RADIANS).sin();
+    let tail_split = TAIL_SPLIT_RADIANS * (drive.wave_phase_radians - TAIL_SPLIT_LAG_RADIANS).sin();
+    let side_fin_openings = drive.calculate_side_fin_openings();
+    let trailing_openings = trailing_drive.calculate_side_fin_openings();
     SwimPose {
-        lap_angle_radians: -PI / 2.0 + TAU * lap_style.lap_count * covered_speed / total_speed,
-        wave_phase_radians,
-        wave_strength,
+        course: drive.course,
+        depth: drive.depth,
+        wave_phase_radians: drive.wave_phase_radians,
+        wave_strength: drive.wave_strength,
         tail_lobe_bends_radians: [tail_bend - tail_split, tail_bend + tail_split],
-        tail_spread_radians: lap_style.glide_tail_spread_radians
-            + lap_style.stroke_tail_spread_radians * stroke * wave_phase_radians.sin().abs(),
+        tail_spread_radians: drive.tail_spread_radians,
         side_fin_openings_radians: side_fin_openings,
         side_fin_bends_radians: [
             trailing_openings[0] - side_fin_openings[0],
             trailing_openings[1] - side_fin_openings[1],
         ],
-        pelvic_fin_opening_radians: PELVIC_SHARE_OF_SIDE_FIN_OPENING
-            * lap_style.calculate_stroke_opening(f64::from(loop_frame)),
+        pelvic_fin_opening_radians: PELVIC_SHARE_OF_SIDE_FIN_OPENING * drive.stroke_opening_radians,
         whisker_sway_radians: WHISKER_SWAY_RADIANS
-            * (wave_phase_radians - WHISKER_SWAY_LAG_RADIANS).sin(),
+            * (drive.wave_phase_radians - WHISKER_SWAY_LAG_RADIANS).sin(),
     }
 }
 
-/// Rest and deep rest swim the cruise until their own movements land.
-fn select_lap_style(behavior: Behavior) -> &'static LapStyle {
+/// What a behavior decides for one frame; the tail, fin trail, pelvic fins, and
+/// whiskers follow from it the same way for every behavior.
+struct Drive {
+    course: Course,
+    depth: f64,
+    wave_phase_radians: f64,
+    wave_strength: f64,
+    tail_spread_radians: f64,
+    /// The outward turn both side fins share.
+    stroke_opening_radians: f64,
+    /// Opens the right fin and tucks the left by the same amount: a flare on the
+    /// inside of the turn, a scull, or a flick.
+    right_fin_offset_radians: f64,
+}
+
+impl Drive {
+    fn calculate_side_fin_openings(&self) -> [f64; 2] {
+        [
+            self.stroke_opening_radians - self.right_fin_offset_radians,
+            self.stroke_opening_radians + self.right_fin_offset_radians,
+        ]
+    }
+}
+
+fn calculate_drive(behavior: Behavior, loop_frame: u32) -> Drive {
     match behavior {
-        Behavior::Dart => &DART_STYLE,
-        Behavior::Cruise | Behavior::Rest | Behavior::DeepRest => &CRUISE_STYLE,
+        Behavior::Cruise => CRUISE_STYLE.calculate_drive(loop_frame),
+        Behavior::Dart => DART_STYLE.calculate_drive(loop_frame),
+        Behavior::Rest => calculate_rest_drive(loop_frame),
+        Behavior::DeepRest => calculate_deep_rest_drive(loop_frame),
+    }
+}
+
+/// Hovers in place a little deeper, swinging and drifting slowly, with two slow beats
+/// and glides and gently sculling side fins.
+fn calculate_rest_drive(loop_frame: u32) -> Drive {
+    const STROKE_FRAME_COUNT: f64 = 45.0;
+    const STROKE_SHARE: f64 = 0.4;
+    const SWING_RADIANS: f64 = 0.1;
+    const DRIFT_PIXELS: [f64; 2] = [3.0, 2.0];
+    const WAVE_FRAME_COUNT: f64 = 15.0;
+    const GLIDE_WAVE_STRENGTH: f64 = 0.15;
+    const STROKE_WAVE_GAIN: f64 = 0.5;
+    const TAIL_SPREAD_RADIANS: f64 = 0.04;
+    const SIDE_FIN_OPENING_RADIANS: f64 = 0.25;
+    const SIDE_FIN_BREATH_RADIANS: f64 = 0.08;
+    const SCULL_SWING_RADIANS: f64 = 0.12;
+    const SCULL_FRAME_COUNT: f64 = 18.0;
+    let frame = f64::from(loop_frame);
+    let loop_turn = TAU * frame / f64::from(REST_FRAME_COUNT);
+    let stroke = calculate_beat(frame, STROKE_FRAME_COUNT, STROKE_SHARE);
+    Drive {
+        course: Course::Hover {
+            heading_offset_radians: SWING_RADIANS * loop_turn.sin(),
+            drift_pixels: [
+                -DRIFT_PIXELS[0] * loop_turn.sin(),
+                -DRIFT_PIXELS[1] * (2.0 * loop_turn + 1.0).sin(),
+            ],
+        },
+        depth: REST_DEPTH,
+        wave_phase_radians: STILL_POSE.wave_phase_radians + frame * TAU / WAVE_FRAME_COUNT,
+        wave_strength: GLIDE_WAVE_STRENGTH + STROKE_WAVE_GAIN * stroke,
+        tail_spread_radians: TAIL_SPREAD_RADIANS,
+        stroke_opening_radians: SIDE_FIN_OPENING_RADIANS
+            + SIDE_FIN_BREATH_RADIANS * (3.0 * loop_turn).sin(),
+        right_fin_offset_radians: SCULL_SWING_RADIANS * (TAU * frame / SCULL_FRAME_COUNT).sin(),
+    }
+}
+
+/// Hovers lower still and barely moves: a slow swing and drift, a breathing wave, and
+/// one flick per loop in which the right fin opens as the left tucks.
+fn calculate_deep_rest_drive(loop_frame: u32) -> Drive {
+    const SWING_RADIANS: f64 = 0.05;
+    const DRIFT_PIXELS: [f64; 2] = [1.5, 1.0];
+    const SINK_PIXELS: f64 = 4.0;
+    const WAVE_FRAME_COUNT: f64 = 30.0;
+    const WAVE_STRENGTH: f64 = 0.12;
+    const WAVE_BREATH: f64 = 0.1;
+    const TAIL_SPREAD_RADIANS: f64 = 0.02;
+    const SIDE_FIN_OPENING_RADIANS: f64 = 0.2;
+    const FLICK_RADIANS: f64 = 0.35;
+    const FLICK_START_FRAME: f64 = 70.0;
+    const FLICK_FRAME_COUNT: f64 = 8.0;
+    let frame = f64::from(loop_frame);
+    let loop_turn = TAU * frame / f64::from(DEEP_REST_FRAME_COUNT);
+    let flick_fraction = (frame - FLICK_START_FRAME) / FLICK_FRAME_COUNT;
+    let flick = if (0.0..=1.0).contains(&flick_fraction) {
+        (PI * flick_fraction).sin()
+    } else {
+        0.0
+    };
+    Drive {
+        course: Course::Hover {
+            heading_offset_radians: SWING_RADIANS * loop_turn.sin(),
+            drift_pixels: [
+                -DRIFT_PIXELS[0] * loop_turn.sin(),
+                SINK_PIXELS - DRIFT_PIXELS[1] * (2.0 * loop_turn).sin(),
+            ],
+        },
+        depth: DEEP_REST_DEPTH,
+        wave_phase_radians: STILL_POSE.wave_phase_radians + frame * TAU / WAVE_FRAME_COUNT,
+        wave_strength: WAVE_STRENGTH + WAVE_BREATH * (2.0 * loop_turn).sin(),
+        tail_spread_radians: TAIL_SPREAD_RADIANS,
+        stroke_opening_radians: SIDE_FIN_OPENING_RADIANS,
+        right_fin_offset_radians: FLICK_RADIANS * flick,
+    }
+}
+
+/// Beat strength at a frame: a smooth beat over the first part of each cycle, then
+/// nothing through the glide.
+fn calculate_beat(frame: f64, cycle_frame_count: f64, beat_share: f64) -> f64 {
+    let cycle_fraction = frame.rem_euclid(cycle_frame_count) / cycle_frame_count;
+    if cycle_fraction < beat_share {
+        (PI * cycle_fraction / beat_share).sin()
+    } else {
+        0.0
     }
 }
 
@@ -218,14 +345,37 @@ impl LapStyle {
         frame.rem_euclid(self.stroke_frame_count) / self.stroke_frame_count
     }
 
-    /// Stroke strength at a frame: a smooth beat over the first part of each stroke
-    /// cycle, then nothing through the glide.
     fn calculate_stroke(&self, frame: f64) -> f64 {
-        let cycle_fraction = self.calculate_cycle_fraction(frame);
-        if cycle_fraction < self.stroke_share {
-            (PI * cycle_fraction / self.stroke_share).sin()
-        } else {
-            0.0
+        calculate_beat(frame, self.stroke_frame_count, self.stroke_share)
+    }
+
+    fn calculate_drive(&self, loop_frame: u32) -> Drive {
+        let lap_speeds: Vec<f64> = (0..self.loop_frame_count)
+            .map(|speed_frame| {
+                self.glide_speed
+                    + self.stroke_speed_gain
+                        * self.calculate_stroke(f64::from(speed_frame) - self.speed_lag_frames)
+            })
+            .collect();
+        let total_speed: f64 = lap_speeds.iter().sum();
+        let covered_speed: f64 = lap_speeds[..loop_frame as usize].iter().sum();
+        let frame = f64::from(loop_frame);
+        let stroke = self.calculate_stroke(frame);
+        let wave_phase_radians =
+            STILL_POSE.wave_phase_radians + frame * TAU / self.wave_frame_count;
+        let scull = self.scull_swing_radians
+            * (TAU * frame / self.scull_frame_count + self.scull_phase_radians).sin();
+        Drive {
+            course: Course::Lap {
+                angle_radians: -PI / 2.0 + TAU * self.lap_count * covered_speed / total_speed,
+            },
+            depth: 0.0,
+            wave_phase_radians,
+            wave_strength: self.glide_wave_strength + self.stroke_wave_gain * stroke,
+            tail_spread_radians: self.glide_tail_spread_radians
+                + self.stroke_tail_spread_radians * stroke * wave_phase_radians.sin().abs(),
+            stroke_opening_radians: self.calculate_stroke_opening(frame),
+            right_fin_offset_radians: self.inside_flare_radians + scull,
         }
     }
 
@@ -253,19 +403,5 @@ impl LapStyle {
                 }
             }
         }
-    }
-
-    /// Each side fin's turn outward: the shared stroke opening, plus the inside flare
-    /// and a scull that move the two fins in opposite directions.
-    fn calculate_side_fin_openings(&self, loop_frame: u32) -> [f64; 2] {
-        let stroke_opening = self.calculate_stroke_opening(f64::from(loop_frame));
-        let scull = self.scull_swing_radians
-            * (TAU * f64::from(loop_frame) / self.scull_frame_count + self.scull_phase_radians)
-                .sin();
-        let inside_offset = self.inside_flare_radians + scull;
-        [
-            stroke_opening - inside_offset,
-            stroke_opening + inside_offset,
-        ]
     }
 }
