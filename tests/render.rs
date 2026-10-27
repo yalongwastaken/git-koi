@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
 use chrono::Days;
+use git_koi::coat::KoiBody;
 use git_koi::history::{AccountSnapshot, ContributionDay, LanguageColor};
 use git_koi::koi::{
     ADULT_CONTRIBUTIONS, FULL_COLOR_CONTRIBUTIONS, KoiDevelopment, MAX_GROWTH_CONTRIBUTIONS,
@@ -13,6 +14,14 @@ use git_koi::render::{FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, KoiFrame, render_
 type LanguageMix<'a> = &'a [(&'a str, Option<&'a str>, f64)];
 
 const RED_MIX: LanguageMix = &[("C++", Some("#f34b7d"), 1.0)];
+const BODIES: [KoiBody; 6] = [
+    KoiBody::White,
+    KoiBody::Black,
+    KoiBody::Asagi,
+    KoiBody::Tea,
+    KoiBody::Gold,
+    KoiBody::Platinum,
+];
 const FOUR_LANGUAGE_MIX: LanguageMix = &[
     ("C", Some("#555555"), 0.25),
     ("Python", Some("#3572a5"), 0.25),
@@ -22,7 +31,7 @@ const FOUR_LANGUAGE_MIX: LanguageMix = &[
 
 #[test]
 fn language_mixes_color_the_same_fish_reproducibly() {
-    let uncolored_frame = render_koi(&develop_with_languages(1_500, &[]));
+    let uncolored_frame = render_koi(&develop_with_languages(1_500, &[]), KoiBody::default());
     let mut distinct_images = BTreeSet::new();
     for language_mix in [
         RED_MIX,
@@ -38,7 +47,10 @@ fn language_mixes_color_the_same_fish_reproducibly() {
         FOUR_LANGUAGE_MIX,
         &[("Rust", Some("#dea584"), 1.0)],
     ] {
-        let koi_frame = render_koi(&develop_with_languages(1_500, language_mix));
+        let koi_frame = render_koi(
+            &develop_with_languages(1_500, language_mix),
+            KoiBody::default(),
+        );
         assert_ne!(koi_frame, uncolored_frame);
         for (uncolored_pixel, colored_pixel) in uncolored_frame
             .as_rgba_bytes()
@@ -52,7 +64,11 @@ fn language_mixes_color_the_same_fish_reproducibly() {
         let png_bytes = encode_png(&koi_frame).unwrap();
         assert_eq!(
             png_bytes,
-            encode_png(&render_koi(&develop_with_languages(1_500, language_mix))).unwrap()
+            encode_png(&render_koi(
+                &develop_with_languages(1_500, language_mix),
+                KoiBody::default()
+            ))
+            .unwrap()
         );
         assert!(distinct_images.insert(png_bytes));
     }
@@ -60,8 +76,12 @@ fn language_mixes_color_the_same_fish_reproducibly() {
 
 #[test]
 fn languages_on_one_pigment_share_its_patches() {
-    let render_mix =
-        |language_mix| render_koi(&develop_with_languages(ADULT_CONTRIBUTIONS, language_mix));
+    let render_mix = |language_mix| {
+        render_koi(
+            &develop_with_languages(ADULT_CONTRIBUTIONS, language_mix),
+            KoiBody::default(),
+        )
+    };
     // Python and TypeScript are both blue; C's gray and a missing color are both black.
     assert_eq!(
         render_mix(&[
@@ -85,8 +105,12 @@ fn languages_on_one_pigment_share_its_patches() {
 
 #[test]
 fn equal_pigment_shares_tie_despite_rounding() {
-    let render_mix =
-        |language_mix| render_koi(&develop_with_languages(ADULT_CONTRIBUTIONS, language_mix));
+    let render_mix = |language_mix| {
+        render_koi(
+            &develop_with_languages(ADULT_CONTRIBUTIONS, language_mix),
+            KoiBody::default(),
+        )
+    };
     // Orange sums to 0.30000000000000004 here; it still ties with yellow, so yellow
     // keeps its place and gives the blue koi its sides.
     assert_eq!(
@@ -107,18 +131,21 @@ fn equal_pigment_shares_tie_despite_rounding() {
 #[test]
 fn the_same_languages_form_different_patches_on_another_account() {
     let mut koi_development = develop_with_languages(ADULT_CONTRIBUTIONS, FOUR_LANGUAGE_MIX);
-    let original_frame = render_koi(&koi_development);
+    let original_frame = render_koi(&koi_development, KoiBody::default());
     koi_development.identity_seed += 1_u64 << 32;
-    assert_ne!(original_frame, render_koi(&koi_development));
+    assert_ne!(
+        original_frame,
+        render_koi(&koi_development, KoiBody::default())
+    );
 }
 
 #[test]
 fn young_koi_show_pale_pigments_until_full_color() {
     let collect_mix_colors = |contribution_total, language_mix| {
-        collect_opaque_colors(&render_koi(&develop_with_languages(
-            contribution_total,
-            language_mix,
-        )))
+        collect_opaque_colors(&render_koi(
+            &develop_with_languages(contribution_total, language_mix),
+            KoiBody::default(),
+        ))
     };
     let full_colors = collect_mix_colors(MAX_GROWTH_CONTRIBUTIONS, RED_MIX);
     let red_colors: BTreeSet<_> = full_colors
@@ -136,6 +163,73 @@ fn young_koi_show_pale_pigments_until_full_color() {
     assert!(!midway_colors.is_disjoint(&red_colors));
     for contribution_total in [FULL_COLOR_CONTRIBUTIONS, ADULT_CONTRIBUTIONS] {
         assert!(collect_mix_colors(contribution_total, RED_MIX).is_disjoint(&pale_colors));
+    }
+}
+
+#[test]
+fn every_body_keeps_each_pigment_visible() {
+    for koi_body in BODIES {
+        let plain_frame = render_koi(
+            &develop_with_languages(FULL_COLOR_CONTRIBUTIONS, &[]),
+            koi_body,
+        );
+        for single_pigment_mix in [
+            RED_MIX,
+            &[("C", Some("#555555"), 1.0)],
+            &[("JavaScript", Some("#f1e05a"), 1.0)],
+            &[("Rust", Some("#dea584"), 1.0)],
+            &[("Python", Some("#3572a5"), 1.0)],
+        ] {
+            let pigment_frame = render_koi(
+                &develop_with_languages(FULL_COLOR_CONTRIBUTIONS, single_pigment_mix),
+                koi_body,
+            );
+            let opaque_pixels: Vec<_> = plain_frame
+                .as_rgba_bytes()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(pigment_frame.as_rgba_bytes().as_chunks::<4>().0.iter())
+                .filter(|(plain_pixel, _)| plain_pixel[3] != 0)
+                .collect();
+            let changed_pixel_count = opaque_pixels
+                .iter()
+                .filter(|(plain_pixel, pigment_pixel)| plain_pixel != pigment_pixel)
+                .count();
+            assert!(
+                changed_pixel_count * 10 > opaque_pixels.len(),
+                "{} nearly disappears on the {koi_body:?} body",
+                single_pigment_mix[0].0
+            );
+        }
+    }
+}
+
+#[test]
+fn bodies_change_colors_but_not_shape() {
+    let five_pigment_mix: LanguageMix = &[
+        ("C++", Some("#f34b7d"), 0.2),
+        ("C", Some("#555555"), 0.2),
+        ("JavaScript", Some("#f1e05a"), 0.2),
+        ("Rust", Some("#dea584"), 0.2),
+        ("Python", Some("#3572a5"), 0.2),
+    ];
+    let koi_development = develop_with_languages(1_500, five_pigment_mix);
+    let white_frame = render_koi(&koi_development, KoiBody::default());
+    assert_eq!(white_frame, render_koi(&koi_development, KoiBody::White));
+    let mut distinct_images = BTreeSet::new();
+    for koi_body in BODIES {
+        let koi_frame = render_koi(&koi_development, koi_body);
+        for (white_pixel, body_pixel) in white_frame
+            .as_rgba_bytes()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(koi_frame.as_rgba_bytes().as_chunks::<4>().0.iter())
+        {
+            assert_eq!(white_pixel[3], body_pixel[3]);
+        }
+        assert!(distinct_images.insert(koi_frame.as_rgba_bytes().to_vec()));
     }
 }
 
@@ -160,7 +254,7 @@ fn growth_slows_and_keeps_the_whole_fish_inside_a_transparent_frame() {
         u64::MAX,
     ] {
         koi_development.total_contributions = contribution_total;
-        let koi_frame = render_koi(&koi_development);
+        let koi_frame = render_koi(&koi_development, KoiBody::default());
         let opaque_bounds = measure_opaque_bounds(&koi_frame);
         assert!(opaque_bounds.left_x > 0 && opaque_bounds.top_y > 0);
         assert!(opaque_bounds.right_x < FRAME_WIDTH_PIXELS - 1);
@@ -208,11 +302,11 @@ fn growth_slows_and_keeps_the_whole_fish_inside_a_transparent_frame() {
 fn png_output_doubles_each_pixel_and_repeats_exactly() {
     let mut koi_development = read_fixture_development();
     koi_development.total_contributions = 1_500;
-    let koi_frame = render_koi(&koi_development);
+    let koi_frame = render_koi(&koi_development, KoiBody::default());
     let png_bytes = encode_png(&koi_frame).unwrap();
     assert_eq!(
         png_bytes,
-        encode_png(&render_koi(&koi_development)).unwrap()
+        encode_png(&render_koi(&koi_development, KoiBody::default())).unwrap()
     );
     let mut png_reader = png::Decoder::new(Cursor::new(&png_bytes))
         .read_info()
@@ -260,8 +354,8 @@ fn quiet_days_change_streak_state_without_changing_the_base_fish() {
     let quiet_development = derive_koi_development(&account_snapshot).unwrap();
     assert_ne!(active_development.streaks, quiet_development.streaks);
     assert_eq!(
-        render_koi(&active_development),
-        render_koi(&quiet_development)
+        render_koi(&active_development, KoiBody::default()),
+        render_koi(&quiet_development, KoiBody::default())
     );
 }
 

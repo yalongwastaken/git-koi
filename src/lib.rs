@@ -1,4 +1,4 @@
-mod coat;
+pub mod coat;
 pub mod collect;
 pub mod history;
 pub mod koi;

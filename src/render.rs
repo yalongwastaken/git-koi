@@ -1,9 +1,9 @@
-//! A curved koi colored from its languages, with Classic shading and transparent
-//! surroundings.
+//! A curved koi colored from its languages on a chosen body, with Classic shading and
+//! transparent surroundings.
 
 use std::f64::consts::{PI, TAU};
 
-use crate::coat::{KoiCoat, WHITE_RAMP};
+use crate::coat::{KoiBody, KoiCoat, WHITE_RAMP};
 use crate::koi::{
     ADULT_CONTRIBUTIONS, KoiDevelopment, YOUNG_SHAPE_CONTRIBUTIONS, calculate_growth_fraction,
 };
@@ -23,14 +23,14 @@ impl KoiFrame {
     }
 }
 
-/// Render the koi in a centered, fixed swimming pose, colored from its languages.
-/// Contribution totals set its size and how far its colors have come in. The account
-/// seed places patches in body coordinates, so growth does not reroll the pattern.
-/// Streak markings are not painted. Identical inputs produce identical pixels without
-/// I/O, clock reads, or input mutation.
-pub fn render_koi(koi_development: &KoiDevelopment) -> KoiFrame {
+/// Render the koi in a centered, fixed swimming pose, colored from its languages on
+/// the caller's chosen body. Contribution totals set its size and how far its colors
+/// have come in. The account seed places patches in body coordinates, so growth does
+/// not reroll the pattern. Streak markings are not painted. Identical inputs produce
+/// identical pixels without I/O, clock reads, or input mutation.
+pub fn render_koi(koi_development: &KoiDevelopment, koi_body: KoiBody) -> KoiFrame {
     let koi_anatomy = calculate_anatomy(koi_development.total_contributions);
-    let koi_coat = KoiCoat::new(koi_development, |along_fraction| {
+    let koi_coat = KoiCoat::new(koi_development, koi_body, |along_fraction| {
         calculate_body_half_width(along_fraction, &koi_anatomy)
     });
     let body_spine = build_spine(&koi_anatomy);
@@ -544,7 +544,7 @@ fn shade_body(
     let koi_anatomy = koi_appearance.koi_anatomy;
     let body_length_pixels = koi_anatomy.body_length_pixels;
     let lateral_fraction = body_sample.lateral_pixels / body_sample.half_width_pixels;
-    let shade_ramp = koi_appearance.koi_coat.select_body_ramp(
+    let body_paint = koi_appearance.koi_coat.select_body_paint(
         body_sample.along_fraction,
         lateral_fraction,
         body_length_pixels,
@@ -553,7 +553,7 @@ fn shade_body(
     );
     const INNER_RIM_PIXELS: f64 = 0.8;
     if body_sample.distance_pixels > body_sample.half_width_pixels - INNER_RIM_PIXELS {
-        return shade_ramp[0];
+        return body_paint.shade_ramp[0];
     }
     let eye_lateral_fraction = 0.55;
     let eye_half_thickness_pixels = 0.8 * koi_anatomy.eye_scale;
@@ -564,11 +564,28 @@ fn shade_body(
     {
         return OUTLINE_COLOR;
     }
-    choose_shade(
-        shade_ramp,
-        calculate_body_brightness(body_sample, lateral_fraction, koi_anatomy),
-        pixel_position,
-    )
+    let mut surface_brightness =
+        calculate_body_brightness(body_sample, lateral_fraction, koi_anatomy);
+    if body_paint.has_metallic_sheen {
+        surface_brightness +=
+            calculate_metallic_sheen(body_sample.along_fraction, lateral_fraction);
+    }
+    choose_shade(body_paint.shade_ramp, surface_brightness, pixel_position)
+}
+
+/// A soft glow along the back and a bright band behind the head.
+fn calculate_metallic_sheen(along_fraction: f64, lateral_fraction: f64) -> f64 {
+    const BACK_GLOW: f64 = 0.1;
+    const BAND_ALONG_FRACTION: f64 = 0.35;
+    const BAND_HALF_WIDTH_FRACTION: f64 = 0.06;
+    const BAND_BRIGHTNESS: f64 = 0.3;
+    let band_brightness = if (along_fraction - BAND_ALONG_FRACTION).abs() < BAND_HALF_WIDTH_FRACTION
+    {
+        BAND_BRIGHTNESS
+    } else {
+        0.0
+    };
+    BACK_GLOW * (1.0 - lateral_fraction.abs()) + band_brightness
 }
 
 fn calculate_body_brightness(

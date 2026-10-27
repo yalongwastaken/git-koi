@@ -161,9 +161,19 @@ lightning, a netted blue back, or a netted solid yellow or orange coat. The
 second pigment adds spots, or red, orange, or yellow sides under a blue back;
 the third tints the fin roots. Young koi show their pigments pale until the
 full-color reference point: red, orange, yellow, and blue come in first, and
-black last. The body stays white, so a koi without counted languages is plain
-white, and streak markings are not painted yet. Pigment rules and palettes live
-in `src/coat.rs`.
+black last.
+
+`render::render_koi` takes one of six `coat::KoiBody` values from the caller:
+white (Shiro, the default), black (Karasu), Asagi (blue-gray with a scale net, a
+white head, and orange fins), tea (Cha), gold (Ogon), or platinum. Each body
+redraws the pigments in its own palette, and a pigment that would match the
+ground swaps so it stays visible: black becomes white on black, blue becomes
+white on Asagi, yellow becomes platinum on gold and gold on platinum, and tea
+draws every pigment in earthy tones. Black and Asagi also brighten yellow, and
+black turns blue sky blue. Gold and platinum catch a metallic sheen on the bare
+body, never on the color patches. A koi without counted languages shows its
+plain body. Streak markings are not painted yet. Pigment rules, bodies, and
+palettes live in `src/coat.rs`.
 
 Every growth level shares a square native canvas. `output::encode_png` exports
 it with exact 2x pixel scaling, preserving crisp edges and transparency.
@@ -180,10 +190,12 @@ Exercise the rendering and encoding boundary with
 
 ### Koi Library
 
-The generated library shows one-, two-, three-, and four-language mixes across
-growth samples, with transparent PNG/SVG pairs and light and dark comparison
-sheets. The mixes use real GitHub language colors on a synthetic account, so the
-samples show the color rule, the variety layouts, and the pale young stage.
+The generated library shows one-, two-, three-, and four-language mixes on the
+default white body, then each body with one language per pigment, across growth
+samples. Each sample is a transparent PNG/SVG pair, and the mixes and bodies
+each get light and dark comparison sheets. The mixes use real GitHub language
+colors on a synthetic account, so the samples show the color rule, the variety
+layouts, the body palettes, and the pale young stage.
 
 Generate the library from the repository root, then open `library/README.md`.
 Git ignores the generated files.

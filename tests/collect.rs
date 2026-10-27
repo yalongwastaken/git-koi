@@ -4,6 +4,7 @@ use std::fs;
 use std::process::Command;
 
 use chrono::{Datelike, Days, NaiveDate, Weekday};
+use git_koi::coat::KoiBody;
 use git_koi::collect::{CollectionError, GraphqlClient, collect_account_snapshot};
 use git_koi::history::{
     ContributionHistoryError, LanguageColor, calculate_language_shares, summarize_contributions,
@@ -43,7 +44,10 @@ fn collected_snapshot_covers_every_page_and_day_and_renders() {
         .sum();
     assert_eq!(contribution_summary.total_contributions, expected_total);
 
-    let koi_frame = render_koi(&derive_koi_development(&account_snapshot).unwrap());
+    let koi_frame = render_koi(
+        &derive_koi_development(&account_snapshot).unwrap(),
+        KoiBody::default(),
+    );
     assert!(
         koi_frame
             .as_rgba_bytes()

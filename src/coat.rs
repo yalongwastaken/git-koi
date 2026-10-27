@@ -1,4 +1,5 @@
-//! Koi coats colored by language pigments, sampled in body coordinates.
+//! Koi coats colored by language pigments on a chosen body, sampled in body
+//! coordinates.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -48,6 +49,89 @@ const PALE_BLUE_RAMP: [[u8; 4]; 3] = [
     [255, 255, 255, 255],
 ];
 const PALE_NET_RAMP: [[u8; 4]; 1] = [[139, 155, 180, 255]];
+const ASAGI_RAMP: [[u8; 4]; 4] = [
+    [38, 43, 68, 255],
+    [58, 68, 102, 255],
+    [90, 105, 136, 255],
+    [139, 155, 180, 255],
+];
+const ASAGI_NET_RAMP: [[u8; 4]; 1] = [[58, 68, 102, 255]];
+const TEA_RAMP: [[u8; 4]; 4] = [
+    [62, 39, 49, 255],
+    [115, 62, 57, 255],
+    [184, 111, 80, 255],
+    [228, 166, 114, 255],
+];
+const GOLD_RAMP: [[u8; 4]; 5] = [
+    [115, 62, 57, 255],
+    [215, 118, 67, 255],
+    [254, 174, 52, 255],
+    [254, 231, 97, 255],
+    [255, 255, 255, 255],
+];
+const PLATINUM_RAMP: [[u8; 4]; 5] = [
+    [90, 105, 136, 255],
+    [139, 155, 180, 255],
+    [192, 203, 220, 255],
+    [244, 247, 251, 255],
+    [255, 255, 255, 255],
+];
+const BRIGHT_YELLOW_RAMP: [[u8; 4]; 4] = [
+    [215, 118, 67, 255],
+    [254, 174, 52, 255],
+    [254, 231, 97, 255],
+    [255, 243, 176, 255],
+];
+const SKY_RAMP: [[u8; 4]; 3] = [[18, 78, 137, 255], [0, 153, 219, 255], [44, 232, 245, 255]];
+const RUST_RAMP: [[u8; 4]; 3] = [[115, 62, 57, 255], [190, 74, 47, 255], [215, 118, 67, 255]];
+const UMBER_RAMP: [[u8; 4]; 3] = [[24, 20, 37, 255], [62, 39, 49, 255], [115, 62, 57, 255]];
+const SAND_RAMP: [[u8; 4]; 3] = [
+    [184, 111, 80, 255],
+    [228, 166, 114, 255],
+    [234, 212, 170, 255],
+];
+const CLAY_RAMP: [[u8; 4]; 3] = [
+    [190, 74, 47, 255],
+    [215, 118, 67, 255],
+    [228, 166, 114, 255],
+];
+const SLATE_RAMP: [[u8; 4]; 3] = [[38, 43, 68, 255], [58, 68, 102, 255], [90, 105, 136, 255]];
+const BRONZE_RAMP: [[u8; 4]; 4] = [
+    [62, 39, 49, 255],
+    [115, 62, 57, 255],
+    [160, 106, 58, 255],
+    [201, 154, 90, 255],
+];
+const METAL_RED_RAMP: [[u8; 4]; 4] = [
+    [162, 38, 51, 255],
+    [247, 118, 34, 255],
+    [254, 174, 52, 255],
+    [255, 255, 255, 255],
+];
+const METAL_ORANGE_RAMP: [[u8; 4]; 4] = [
+    [190, 74, 47, 255],
+    [247, 118, 34, 255],
+    [254, 174, 52, 255],
+    [255, 255, 255, 255],
+];
+const COPPER_RAMP: [[u8; 4]; 4] = [
+    [115, 62, 57, 255],
+    [184, 111, 80, 255],
+    [228, 166, 114, 255],
+    [255, 255, 255, 255],
+];
+const METAL_BLUE_RAMP: [[u8; 4]; 4] = [
+    [18, 78, 137, 255],
+    [0, 153, 219, 255],
+    [139, 155, 180, 255],
+    [255, 255, 255, 255],
+];
+const STEEL_RAMP: [[u8; 4]; 4] = [
+    [38, 43, 68, 255],
+    [58, 68, 102, 255],
+    [90, 105, 136, 255],
+    [192, 203, 220, 255],
+];
 
 /// Patch scores must beat the white ground's score to place a pigment.
 const WHITE_PATCH_SCORE: f64 = 0.5;
@@ -63,6 +147,81 @@ const SPOT_SPAN: Range<f64> = 0.12..0.8;
 const SPOT_LATERAL_LIMIT: f64 = 0.8;
 /// The full variety layout tints 40% of each fin; the pull shortens the tint with it.
 const FIN_ROOT_TINT_FRACTION: f64 = 0.4 * VARIETY_PULL;
+
+/// The koi's ground color, chosen by the profile owner. Each body redraws the language
+/// pigments in its own palette, and a pigment that would match the ground swaps to one
+/// that stays visible.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum KoiBody {
+    /// Shiro: white.
+    #[default]
+    White,
+    /// Karasu: black.
+    Black,
+    /// Blue-gray with a scale net, a white head, and orange fins.
+    Asagi,
+    /// Cha: tea, with earthy colors.
+    Tea,
+    /// Ogon: metallic gold.
+    Gold,
+    /// Metallic platinum.
+    Platinum,
+}
+
+impl KoiBody {
+    fn select_ground_ramp(self) -> &'static [[u8; 4]] {
+        match self {
+            Self::White => &WHITE_RAMP,
+            Self::Black => &BLACK_RAMP,
+            Self::Asagi => &ASAGI_RAMP,
+            Self::Tea => &TEA_RAMP,
+            Self::Gold => &GOLD_RAMP,
+            Self::Platinum => &PLATINUM_RAMP,
+        }
+    }
+
+    fn select_fin_ramp(self) -> &'static [[u8; 4]] {
+        match self {
+            Self::White | Self::Black => &WHITE_RAMP,
+            Self::Asagi => &ORANGE_RAMP,
+            Self::Tea | Self::Gold | Self::Platinum => self.select_ground_ramp(),
+        }
+    }
+
+    fn has_metallic_sheen(self) -> bool {
+        matches!(self, Self::Gold | Self::Platinum)
+    }
+
+    /// The body's version of a pigment: black turns white on black, blue turns white on
+    /// Asagi, yellow turns platinum on gold and gold on platinum, and tea draws every
+    /// pigment in earthy tones. Black and Asagi also brighten yellow, and black turns
+    /// blue sky blue.
+    fn select_pigment_ramp(self, pigment: Pigment) -> &'static [[u8; 4]] {
+        match (self, pigment) {
+            (Self::Black, Pigment::Sumi) | (Self::Asagi, Pigment::Ai) => &WHITE_RAMP,
+            (Self::Black | Self::Asagi, Pigment::Ki) => &BRIGHT_YELLOW_RAMP,
+            (Self::Black, Pigment::Ai) => &SKY_RAMP,
+            (Self::Tea, Pigment::Beni) => &RUST_RAMP,
+            (Self::Tea, Pigment::Sumi) => &UMBER_RAMP,
+            (Self::Tea, Pigment::Ki) => &SAND_RAMP,
+            (Self::Tea, Pigment::Orenji) => &CLAY_RAMP,
+            (Self::Tea, Pigment::Ai) => &SLATE_RAMP,
+            (Self::Gold, Pigment::Beni) => &METAL_RED_RAMP,
+            (Self::Gold, Pigment::Sumi) => &BRONZE_RAMP,
+            (Self::Gold, Pigment::Ki) => &PLATINUM_RAMP,
+            (Self::Platinum, Pigment::Beni) => &METAL_ORANGE_RAMP,
+            (Self::Platinum, Pigment::Sumi) => &STEEL_RAMP,
+            (Self::Platinum, Pigment::Ki) => &GOLD_RAMP,
+            (Self::Gold | Self::Platinum, Pigment::Orenji) => &COPPER_RAMP,
+            (Self::Gold | Self::Platinum, Pigment::Ai) => &METAL_BLUE_RAMP,
+            (_, Pigment::Beni) => &RED_RAMP,
+            (_, Pigment::Sumi) => &BLACK_RAMP,
+            (_, Pigment::Ki) => &YELLOW_RAMP,
+            (_, Pigment::Orenji) => &ORANGE_RAMP,
+            (_, Pigment::Ai) => &BLUE_RAMP,
+        }
+    }
+}
 
 /// Koi pigments; each language color becomes the one nearest in hue.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -88,11 +247,19 @@ enum Pigment {
 /// red, orange, yellow, and blue come in first, and black last.
 pub(crate) struct KoiCoat {
     identity_seed: u64,
+    koi_body: KoiBody,
     /// Largest share first; equal shares keep pigment order.
     pigment_shares: Vec<(Pigment, f64)>,
     patch_biases: Vec<f64>,
     spot_threshold: f64,
     color_fraction: f64,
+}
+
+/// The colors for one body pixel.
+pub(crate) struct BodyPaint {
+    pub(crate) shade_ramp: &'static [[u8; 4]],
+    /// Bare gold or platinum catches the metallic sheen; color patches never do.
+    pub(crate) has_metallic_sheen: bool,
 }
 
 struct BodySample {
@@ -107,6 +274,7 @@ impl KoiCoat {
     /// recorded color counts as black.
     pub(crate) fn new(
         koi_development: &KoiDevelopment,
+        koi_body: KoiBody,
         calculate_half_width: impl Fn(f64) -> f64,
     ) -> Self {
         let identity_seed = koi_development.identity_seed;
@@ -114,6 +282,7 @@ impl KoiCoat {
         let body_samples = sample_body(calculate_half_width);
         Self {
             identity_seed,
+            koi_body,
             patch_biases: fit_patch_biases(&pigment_shares, identity_seed, &body_samples),
             spot_threshold: find_spot_threshold(&pigment_shares, identity_seed, &body_samples),
             pigment_shares,
@@ -123,17 +292,15 @@ impl KoiCoat {
         }
     }
 
-    pub(crate) fn select_body_ramp(
+    pub(crate) fn select_body_paint(
         &self,
         along_fraction: f64,
         lateral_fraction: f64,
         body_length_pixels: f64,
         half_width_pixels: f64,
         dither_threshold: f64,
-    ) -> &'static [[u8; 4]] {
-        let Some(pigment) = self.select_body_pigment(along_fraction, lateral_fraction) else {
-            return &WHITE_RAMP;
-        };
+    ) -> BodyPaint {
+        const ASAGI_HEAD_FRACTION: f64 = 0.11;
         let is_on_net = || {
             is_on_scale_net(
                 along_fraction,
@@ -142,15 +309,31 @@ impl KoiCoat {
                 half_width_pixels,
             )
         };
+        let Some(pigment) = self.select_body_pigment(along_fraction, lateral_fraction) else {
+            let shade_ramp: &'static [[u8; 4]] = match self.koi_body {
+                KoiBody::Asagi if along_fraction <= ASAGI_HEAD_FRACTION => &WHITE_RAMP,
+                KoiBody::Asagi if is_on_net() => &ASAGI_NET_RAMP,
+                koi_body => koi_body.select_ground_ramp(),
+            };
+            return BodyPaint {
+                shade_ramp,
+                has_metallic_sheen: self.koi_body.has_metallic_sheen(),
+            };
+        };
+        let pigment_ramp = self.koi_body.select_pigment_ramp(pigment);
         let base_pigment = self.pigment_shares.first().map(|&(pigment, _)| pigment);
         let shade_ramp: &'static [[u8; 4]] = match pigment {
-            Pigment::Ai if is_on_net() => &BLUE_NET_RAMP,
+            // Only the standard blue carries its dark net.
+            Pigment::Ai if pigment_ramp == BLUE_RAMP && is_on_net() => &BLUE_NET_RAMP,
             Pigment::Ki | Pigment::Orenji if base_pigment == Some(pigment) && is_on_net() => {
-                &select_pigment_ramp(pigment)[..1]
+                &pigment_ramp[..1]
             }
-            _ => select_pigment_ramp(pigment),
+            _ => pigment_ramp,
         };
-        self.develop_ramp(pigment, shade_ramp, dither_threshold)
+        BodyPaint {
+            shade_ramp: self.develop_ramp(pigment, shade_ramp, dither_threshold),
+            has_metallic_sheen: false,
+        }
     }
 
     pub(crate) fn select_fin_ramp(
@@ -165,11 +348,11 @@ impl KoiCoat {
             {
                 self.develop_ramp(
                     tertiary_pigment,
-                    select_pigment_ramp(tertiary_pigment),
+                    self.koi_body.select_pigment_ramp(tertiary_pigment),
                     dither_threshold,
                 )
             }
-            _ => &WHITE_RAMP,
+            _ => self.koi_body.select_fin_ramp(),
         }
     }
 
@@ -330,16 +513,6 @@ fn select_pigment(language_color: Option<LanguageColor>) -> Pigment {
         hue_degrees if hue_degrees < 45.0 => Pigment::Orenji,
         hue_degrees if hue_degrees < 160.0 => Pigment::Ki,
         _ => Pigment::Ai,
-    }
-}
-
-fn select_pigment_ramp(pigment: Pigment) -> &'static [[u8; 4]] {
-    match pigment {
-        Pigment::Beni => &RED_RAMP,
-        Pigment::Sumi => &BLACK_RAMP,
-        Pigment::Ki => &YELLOW_RAMP,
-        Pigment::Orenji => &ORANGE_RAMP,
-        Pigment::Ai => &BLUE_RAMP,
     }
 }
 
