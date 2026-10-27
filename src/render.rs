@@ -26,8 +26,9 @@ impl KoiFrame {
 /// Render the koi in a centered, fixed swimming pose, colored from its languages on
 /// the caller's chosen body. Contribution totals set its size and how far its colors
 /// have come in. The account seed places patches in body coordinates, so growth does
-/// not reroll the pattern. Streak markings are not painted. Identical inputs produce
-/// identical pixels without I/O, clock reads, or input mutation.
+/// not reroll the pattern. Streak marks follow the development's streaks as of its
+/// observation date. Identical inputs produce identical pixels without I/O, clock
+/// reads, or input mutation.
 pub fn render_koi(koi_development: &KoiDevelopment, koi_body: KoiBody) -> KoiFrame {
     let koi_anatomy = calculate_anatomy(koi_development.total_contributions);
     let koi_coat = KoiCoat::new(koi_development, koi_body, |along_fraction| {
@@ -564,28 +565,15 @@ fn shade_body(
     {
         return OUTLINE_COLOR;
     }
-    let mut surface_brightness =
-        calculate_body_brightness(body_sample, lateral_fraction, koi_anatomy);
-    if body_paint.has_metallic_sheen {
-        surface_brightness +=
-            calculate_metallic_sheen(body_sample.along_fraction, lateral_fraction);
+    if let Some(glint_color) = body_paint.glint_color {
+        return glint_color;
     }
-    choose_shade(body_paint.shade_ramp, surface_brightness, pixel_position)
-}
-
-/// A soft glow along the back and a bright band behind the head.
-fn calculate_metallic_sheen(along_fraction: f64, lateral_fraction: f64) -> f64 {
-    const BACK_GLOW: f64 = 0.1;
-    const BAND_ALONG_FRACTION: f64 = 0.35;
-    const BAND_HALF_WIDTH_FRACTION: f64 = 0.06;
-    const BAND_BRIGHTNESS: f64 = 0.3;
-    let band_brightness = if (along_fraction - BAND_ALONG_FRACTION).abs() < BAND_HALF_WIDTH_FRACTION
-    {
-        BAND_BRIGHTNESS
-    } else {
-        0.0
-    };
-    BACK_GLOW * (1.0 - lateral_fraction.abs()) + band_brightness
+    let surface_brightness = calculate_body_brightness(body_sample, lateral_fraction, koi_anatomy)
+        + body_paint.brightness_shift;
+    adjust_saturation(
+        choose_shade(body_paint.shade_ramp, surface_brightness, pixel_position),
+        body_paint.saturation,
+    )
 }
 
 fn calculate_body_brightness(
@@ -627,13 +615,15 @@ fn shade_fin(fin_sample: &CurveSample, pixel_position: [u32; 2], koi_coat: &KoiC
     const FIN_RIM_PIXELS: f64 = 0.6;
     const FIN_RAY_SPACING_PIXELS: f64 = 1.8;
     const FIN_ROOT_SHADOW: f64 = 0.12;
-    let shade_ramp = koi_coat.select_fin_ramp(
+    let is_on_rim = fin_sample.distance_pixels > fin_sample.half_width_pixels - FIN_RIM_PIXELS;
+    let fin_paint = koi_coat.select_fin_paint(
         fin_sample.along_fraction,
         fin_sample.lateral_pixels / fin_sample.half_width_pixels,
+        is_on_rim,
         calculate_dither_threshold(pixel_position),
     );
-    if fin_sample.distance_pixels > fin_sample.half_width_pixels - FIN_RIM_PIXELS {
-        return shade_ramp[1];
+    if is_on_rim {
+        return adjust_saturation(fin_paint.shade_ramp[1], fin_paint.saturation);
     }
     let ray_phase = (fin_sample.lateral_pixels / FIN_RAY_SPACING_PIXELS).rem_euclid(1.0);
     let ray_brightness = 0.68;
@@ -644,7 +634,14 @@ fn shade_fin(fin_sample: &CurveSample, pixel_position: [u32; 2], koi_coat: &KoiC
         membrane_brightness
     };
     let root_shadow = FIN_ROOT_SHADOW * (1.0 - fin_sample.along_fraction).powi(2);
-    choose_shade(shade_ramp, surface_brightness - root_shadow, pixel_position)
+    adjust_saturation(
+        choose_shade(
+            fin_paint.shade_ramp,
+            surface_brightness - root_shadow,
+            pixel_position,
+        ),
+        fin_paint.saturation,
+    )
 }
 
 /// The body is drawn as a chain of round segments. The head widens from a round nose
@@ -715,6 +712,18 @@ fn choose_shade(
     let shade_index = base_index
         + usize::from(shade_position.fract() > calculate_dither_threshold(pixel_position));
     shade_ramp[shade_index.min(shade_ramp.len() - 1)]
+}
+
+/// Scale a color's distance from its own gray; one leaves it unchanged.
+fn adjust_saturation(pixel_color: [u8; 4], saturation: f64) -> [u8; 4] {
+    let [red, green, blue, alpha] = pixel_color.map(f64::from);
+    let gray = 0.3 * red + 0.59 * green + 0.11 * blue;
+    let saturate = |channel: f64| {
+        (gray + (channel - gray) * saturation)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    [saturate(red), saturate(green), saturate(blue), alpha as u8]
 }
 
 /// The ordered-dither threshold at a pixel, from zero through one.

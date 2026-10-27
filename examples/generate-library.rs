@@ -1,10 +1,11 @@
 use std::{env, error::Error, fs, path::Path, process::ExitCode};
 
+use chrono::{Datelike, Days, NaiveDate};
 use git_koi::coat::KoiBody;
-use git_koi::history::{AccountSnapshot, LanguageColor};
+use git_koi::history::{AccountSnapshot, ContributionWeek, LanguageColor};
 use git_koi::koi::{
-    ADULT_CONTRIBUTIONS, KoiDevelopment, MAX_GROWTH_CONTRIBUTIONS, YOUNG_SHAPE_CONTRIBUTIONS,
-    derive_koi_development,
+    ADULT_CONTRIBUTIONS, KoiDevelopment, MAX_GROWTH_CONTRIBUTIONS, RecentStreak,
+    YOUNG_SHAPE_CONTRIBUTIONS, derive_koi_development,
 };
 use git_koi::output::{
     STATIC_EXPORT_SCALE, STATIC_HEIGHT_PIXELS, STATIC_WIDTH_PIXELS, encode_png, encode_svg,
@@ -53,6 +54,40 @@ const BODY_SAMPLES: [(&str, KoiBody); 6] = [
     ("gold", KoiBody::Gold),
     ("platinum", KoiBody::Platinum),
 ];
+/// A recent streak sample: still running, or ended some days before the observation.
+#[derive(Clone, Copy)]
+enum RecentSample {
+    Current { weeks: usize },
+    Ended { weeks: usize, days_since_end: u64 },
+}
+/// Streak samples on the four-language mix: name, longest streak in weeks, and the
+/// recent streak. Each row of six fills one overview row.
+const MARKING_SAMPLES: [(&str, usize, Option<RecentSample>); 12] = [
+    (
+        "current-1-week",
+        1,
+        Some(RecentSample::Current { weeks: 1 }),
+    ),
+    (
+        "current-6-weeks",
+        6,
+        Some(RecentSample::Current { weeks: 6 }),
+    ),
+    (
+        "current-13-weeks",
+        13,
+        Some(RecentSample::Current { weeks: 13 }),
+    ),
+    ("ended-1-week-ago", 13, Some(ended_long_streak(7))),
+    ("ended-2-weeks-ago", 13, Some(ended_long_streak(14))),
+    ("ended-4-weeks-ago", 13, Some(ended_long_streak(28))),
+    ("longest-0-weeks", 0, None),
+    ("longest-1-week", 1, Some(ended_long_ago(1))),
+    ("longest-4-weeks", 4, Some(ended_long_ago(4))),
+    ("longest-52-weeks", 52, Some(ended_long_ago(52))),
+    ("longest-104-weeks", 104, Some(ended_long_ago(104))),
+    ("longest-208-weeks", 208, Some(ended_long_ago(208))),
+];
 const GROWTH_SAMPLES: [u64; 6] = [
     0,
     500,
@@ -91,6 +126,8 @@ fn generate_library(output_directory: &Path) -> Result<(), Box<dyn Error>> {
     let account_snapshot: AccountSnapshot =
         serde_json::from_str(include_str!("../tests/fixtures/account-with-history.json"))?;
     let mut koi_development = derive_koi_development(&account_snapshot)?;
+    // Growth samples show normal colors and no streak fins.
+    set_streaks(&mut koi_development, 4, Some(ended_long_ago(4)));
     let mut index_markdown = build_index_header(koi_development.identity_seed);
     fs::create_dir_all(output_directory)?;
     let mut mix_frames = Vec::new();
@@ -125,6 +162,46 @@ fn generate_library(output_directory: &Path) -> Result<(), Box<dyn Error>> {
         )?);
     }
     write_overviews(output_directory, "bodies", &body_frames)?;
+    let mut marking_frames = Vec::new();
+    koi_development.total_contributions = ADULT_CONTRIBUTIONS;
+    let marking_mix_description = apply_language_mix(&mut koi_development, LANGUAGE_SAMPLES[3].1)?;
+    index_markdown.push_str(&format!(
+        "## Streak Markings\n\n{marking_mix_description}, at {ADULT_CONTRIBUTIONS} contributions.\n\n"
+    ));
+    for (sample_name, longest_week_count, recent_sample) in MARKING_SAMPLES {
+        set_streaks(&mut koi_development, longest_week_count, recent_sample);
+        marking_frames.push(render_sample(
+            output_directory,
+            &koi_development,
+            KoiBody::default(),
+            &format!("marks-{sample_name}"),
+            &capitalize(&sample_name.replace('-', " ")),
+            &mut index_markdown,
+        )?);
+    }
+    apply_language_mix(&mut koi_development, BODY_MIX)?;
+    index_markdown.push_str(&format!(
+        "## Bodies With and Without Marks\n\n{body_mix_description}, at \
+        {ADULT_CONTRIBUTIONS} contributions. Without marks, no streak has happened yet; \
+        with every mark, a 13-week streak is running and the longest is 208 weeks.\n\n"
+    ));
+    for (mark_name, longest_week_count, recent_sample) in [
+        ("unmarked", 0, None),
+        ("marked", 208, Some(RecentSample::Current { weeks: 13 })),
+    ] {
+        set_streaks(&mut koi_development, longest_week_count, recent_sample);
+        for (body_name, koi_body) in BODY_SAMPLES {
+            marking_frames.push(render_sample(
+                output_directory,
+                &koi_development,
+                koi_body,
+                &format!("marks-{mark_name}-{body_name}"),
+                &format!("{} Body, {}", capitalize(body_name), capitalize(mark_name)),
+                &mut index_markdown,
+            )?);
+        }
+    }
+    write_overviews(output_directory, "markings", &marking_frames)?;
     write_artifact(
         output_directory,
         "README.md",
@@ -157,6 +234,53 @@ fn apply_language_mix(
     Ok(mix_description.join(", "))
 }
 
+/// Replace the development's streaks with a sample longest and recent streak.
+fn set_streaks(
+    koi_development: &mut KoiDevelopment,
+    longest_week_count: usize,
+    recent_sample: Option<RecentSample>,
+) {
+    koi_development.streaks.longest = build_weeks(longest_week_count);
+    koi_development.streaks.recent = recent_sample.map(|recent_sample| match recent_sample {
+        RecentSample::Current { weeks } => RecentStreak::Current(build_weeks(weeks)),
+        RecentSample::Ended {
+            weeks,
+            days_since_end,
+        } => RecentStreak::Ended {
+            weeks: build_weeks(weeks),
+            ended_on: koi_development.observed_on - Days::new(days_since_end),
+        },
+    });
+}
+
+/// A 13-week streak that ended some days ago, so its fins are fading.
+const fn ended_long_streak(days_since_end: u64) -> RecentSample {
+    RecentSample::Ended {
+        weeks: 13,
+        days_since_end,
+    }
+}
+
+/// A streak that ended long enough ago that its fins have faded.
+const fn ended_long_ago(weeks: usize) -> RecentSample {
+    RecentSample::Ended {
+        weeks,
+        days_since_end: 70,
+    }
+}
+
+/// Fully active weeks; the marks depend only on how many there are.
+fn build_weeks(week_count: usize) -> Vec<ContributionWeek> {
+    let first_monday: NaiveDate = "2024-01-01".parse().expect("a valid date");
+    (0..week_count)
+        .map(|week_index| ContributionWeek {
+            iso_week: (first_monday + Days::new(7 * week_index as u64)).iso_week(),
+            active_day_count: 7,
+            observed_day_count: 7,
+        })
+        .collect()
+}
+
 /// Render and write one sample per growth total, and list them in the index.
 fn render_growth_samples(
     output_directory: &Path,
@@ -168,23 +292,40 @@ fn render_growth_samples(
     let mut rendered_frames = Vec::new();
     for contribution_total in GROWTH_SAMPLES {
         koi_development.total_contributions = contribution_total;
-        let koi_frame = render_koi(koi_development, koi_body);
-        let file_name = format!("{sample_name}-{contribution_total}.png");
-        write_artifact(output_directory, &file_name, &encode_png(&koi_frame)?)?;
-        let svg_name = format!("{sample_name}-{contribution_total}.svg");
-        write_artifact(
+        rendered_frames.push(render_sample(
             output_directory,
-            &svg_name,
-            encode_svg(&koi_frame).as_bytes(),
-        )?;
-        index_markdown.push_str(&format!(
-            "### {contribution_total} Contributions\n\n\
-            ![{sample_name} at {contribution_total} contributions]({file_name})\n\n\
-            [SVG]({svg_name})\n\n"
-        ));
-        rendered_frames.push(koi_frame);
+            koi_development,
+            koi_body,
+            &format!("{sample_name}-{contribution_total}"),
+            &format!("{contribution_total} Contributions"),
+            index_markdown,
+        )?);
     }
     Ok(rendered_frames)
+}
+
+/// Render and write one PNG/SVG pair, and list it in the index under a heading.
+fn render_sample(
+    output_directory: &Path,
+    koi_development: &KoiDevelopment,
+    koi_body: KoiBody,
+    file_stem: &str,
+    heading: &str,
+    index_markdown: &mut String,
+) -> Result<KoiFrame, Box<dyn Error>> {
+    let koi_frame = render_koi(koi_development, koi_body);
+    let file_name = format!("{file_stem}.png");
+    write_artifact(output_directory, &file_name, &encode_png(&koi_frame)?)?;
+    let svg_name = format!("{file_stem}.svg");
+    write_artifact(
+        output_directory,
+        &svg_name,
+        encode_svg(&koi_frame).as_bytes(),
+    )?;
+    index_markdown.push_str(&format!(
+        "### {heading}\n\n![{file_stem}]({file_name})\n\n[SVG]({svg_name})\n\n"
+    ));
+    Ok(koi_frame)
 }
 
 fn write_overviews(
@@ -213,14 +354,20 @@ fn build_index_header(identity_seed: u64) -> String {
         "# Koi Library\n\n\
         These samples share the same anatomy, pose, and Classic lighting. Language mixes\n\
         appear on the default white body, followed by each body with one language per\n\
-        pigment. The samples use a fixed synthetic account seed, explicit language shares\n\
-        with their GitHub colors, and explicit growth totals.\n\n\
+        pigment, then streak markings. The samples use a fixed synthetic account seed,\n\
+        explicit language shares with their GitHub colors, explicit growth totals, and\n\
+        explicit streaks. Growth samples show normal colors and no streak fins.\n\n\
         Regenerate with the command in the\n\
         [repository README](../README.md#koi-library).\n\n\
-        Overview columns follow the contribution totals below, from left to right. Rows\n\
-        follow the mix or body order. These are samples of continuous growth.\n\n\
+        In the mix and body overviews, columns follow the contribution totals below,\n\
+        from left to right, and rows follow the mix or body order. These are samples of\n\
+        continuous growth. The markings overview follows the streak marking sections in\n\
+        rows of six: current streaks, longest streaks, then bodies without and with\n\
+        marks.\n\n\
         Mixes: [light overview](overview-light.png) · [dark overview](overview-dark.png)\n\n\
         Bodies: [light overview](bodies-light.png) · [dark overview](bodies-dark.png)\n\n\
+        Streak markings: [light overview](markings-light.png) ·\n\
+        [dark overview](markings-dark.png)\n\n\
         Native canvas: {FRAME_WIDTH_PIXELS} × {FRAME_HEIGHT_PIXELS}.\n\n\
         PNG and SVG exports: {STATIC_WIDTH_PIXELS} × {STATIC_HEIGHT_PIXELS}.\n\n\
         Identity seed: {identity_seed}.\n\n"

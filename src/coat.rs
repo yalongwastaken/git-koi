@@ -6,6 +6,7 @@ use std::ops::Range;
 
 use crate::history::LanguageColor;
 use crate::koi::{FULL_COLOR_CONTRIBUTIONS, KoiDevelopment, calculate_growth_fraction};
+use crate::markings::{StreakMarks, calculate_streak_marks};
 
 pub(crate) const WHITE_RAMP: [[u8; 4]; 4] = [
     [90, 105, 136, 255],
@@ -49,6 +50,12 @@ const PALE_BLUE_RAMP: [[u8; 4]; 3] = [
     [255, 255, 255, 255],
 ];
 const PALE_NET_RAMP: [[u8; 4]; 1] = [[139, 155, 180, 255]];
+const STREAK_GOLD_RAMP: [[u8; 4]; 3] = [
+    [247, 118, 34, 255],
+    [254, 174, 52, 255],
+    [254, 231, 97, 255],
+];
+const GLINT_COLOR: [u8; 4] = [255, 255, 255, 255];
 const ASAGI_RAMP: [[u8; 4]; 4] = [
     [38, 43, 68, 255],
     [58, 68, 102, 255],
@@ -147,6 +154,12 @@ const SPOT_SPAN: Range<f64> = 0.12..0.8;
 const SPOT_LATERAL_LIMIT: f64 = 0.8;
 /// The full variety layout tints 40% of each fin; the pull shortens the tint with it.
 const FIN_ROOT_TINT_FRACTION: f64 = 0.4 * VARIETY_PULL;
+/// Streak color fills the fin rims and each fin beyond this fraction of its length.
+const STREAK_FIN_START_FRACTION: f64 = 0.55;
+const DULL_SATURATION: f64 = 0.3;
+const VIVID_SATURATION_GAIN: f64 = 0.3;
+const DULL_DARKENING: f64 = 0.15;
+const VIVID_BRIGHTENING: f64 = 0.12;
 
 /// The koi's ground color, chosen by the profile owner. Each body redraws the language
 /// pigments in its own palette, and a pigment that would match the ground swaps to one
@@ -188,8 +201,30 @@ impl KoiBody {
         }
     }
 
-    fn has_metallic_sheen(self) -> bool {
-        matches!(self, Self::Gold | Self::Platinum)
+    /// The current-streak fin color, chosen to stand out against this body's fins.
+    fn select_streak_fin_ramp(self) -> &'static [[u8; 4]] {
+        match self {
+            Self::Asagi | Self::Gold => &RED_RAMP,
+            Self::White | Self::Black | Self::Tea | Self::Platinum => &STREAK_GOLD_RAMP,
+        }
+    }
+
+    /// Gold and platinum: a soft glow along the back and a bright band behind the head.
+    fn calculate_metallic_sheen(self, along_fraction: f64, lateral_fraction: f64) -> f64 {
+        const BACK_GLOW: f64 = 0.1;
+        const BAND_ALONG_FRACTION: f64 = 0.35;
+        const BAND_HALF_WIDTH_FRACTION: f64 = 0.06;
+        const BAND_BRIGHTNESS: f64 = 0.3;
+        if !matches!(self, Self::Gold | Self::Platinum) {
+            return 0.0;
+        }
+        let band_brightness =
+            if (along_fraction - BAND_ALONG_FRACTION).abs() < BAND_HALF_WIDTH_FRACTION {
+                BAND_BRIGHTNESS
+            } else {
+                0.0
+            };
+        BACK_GLOW * (1.0 - lateral_fraction.abs()) + band_brightness
     }
 
     /// The body's version of a pigment: black turns white on black, blue turns white on
@@ -244,7 +279,8 @@ enum Pigment {
 /// body area in proportion to its share, pulled toward the top pigment's classic
 /// variety layout. The second pigment adds spots, or Asagi sides under blue; the third
 /// tints the fin roots. Young koi show pigments pale until FULL_COLOR_CONTRIBUTIONS:
-/// red, orange, yellow, and blue come in first, and black last.
+/// red, orange, yellow, and blue come in first, and black last. Streak marks color
+/// the fins and change only the language colors.
 pub(crate) struct KoiCoat {
     identity_seed: u64,
     koi_body: KoiBody,
@@ -253,13 +289,29 @@ pub(crate) struct KoiCoat {
     patch_biases: Vec<f64>,
     spot_threshold: f64,
     color_fraction: f64,
+    streak_marks: StreakMarks,
 }
 
-/// The colors for one body pixel.
-pub(crate) struct BodyPaint {
+/// How to color one pixel of the coat.
+pub(crate) struct CoatPaint {
     pub(crate) shade_ramp: &'static [[u8; 4]],
-    /// Bare gold or platinum catches the metallic sheen; color patches never do.
-    pub(crate) has_metallic_sheen: bool,
+    /// Added to the lighting before a shade is chosen.
+    pub(crate) brightness_shift: f64,
+    /// Scales a shaded color's distance from its own gray; one leaves it unchanged.
+    pub(crate) saturation: f64,
+    /// Replaces the shaded color, as on a glinting scale.
+    pub(crate) glint_color: Option<[u8; 4]>,
+}
+
+impl CoatPaint {
+    fn plain(shade_ramp: &'static [[u8; 4]]) -> Self {
+        Self {
+            shade_ramp,
+            brightness_shift: 0.0,
+            saturation: 1.0,
+            glint_color: None,
+        }
+    }
 }
 
 struct BodySample {
@@ -289,6 +341,7 @@ impl KoiCoat {
             color_fraction: (calculate_growth_fraction(koi_development.total_contributions)
                 / calculate_growth_fraction(FULL_COLOR_CONTRIBUTIONS))
             .min(1.0),
+            streak_marks: calculate_streak_marks(koi_development),
         }
     }
 
@@ -299,7 +352,7 @@ impl KoiCoat {
         body_length_pixels: f64,
         half_width_pixels: f64,
         dither_threshold: f64,
-    ) -> BodyPaint {
+    ) -> CoatPaint {
         const ASAGI_HEAD_FRACTION: f64 = 0.11;
         let is_on_net = || {
             is_on_scale_net(
@@ -315,9 +368,11 @@ impl KoiCoat {
                 KoiBody::Asagi if is_on_net() => &ASAGI_NET_RAMP,
                 koi_body => koi_body.select_ground_ramp(),
             };
-            return BodyPaint {
-                shade_ramp,
-                has_metallic_sheen: self.koi_body.has_metallic_sheen(),
+            return CoatPaint {
+                brightness_shift: self
+                    .koi_body
+                    .calculate_metallic_sheen(along_fraction, lateral_fraction),
+                ..CoatPaint::plain(shade_ramp)
             };
         };
         let pigment_ramp = self.koi_body.select_pigment_ramp(pigment);
@@ -330,30 +385,110 @@ impl KoiCoat {
             }
             _ => pigment_ramp,
         };
-        BodyPaint {
+        let is_glinting = self.is_glinting(
+            along_fraction,
+            lateral_fraction,
+            body_length_pixels,
+            half_width_pixels,
+        );
+        CoatPaint {
             shade_ramp: self.develop_ramp(pigment, shade_ramp, dither_threshold),
-            has_metallic_sheen: false,
+            brightness_shift: self.calculate_vibrancy_shift(pigment),
+            saturation: self.calculate_vibrancy_saturation(),
+            glint_color: is_glinting.then_some(GLINT_COLOR),
         }
     }
 
-    pub(crate) fn select_fin_ramp(
+    /// The current streak fills a dithered share of the fin rims and tips with the
+    /// body's streak color. Elsewhere, a fin-root tint is a language color, unless it
+    /// matches the plain fins and so never shows.
+    pub(crate) fn select_fin_paint(
         &self,
         along_fraction: f64,
         lateral_fraction: f64,
+        is_on_rim: bool,
         dither_threshold: f64,
-    ) -> &'static [[u8; 4]] {
+    ) -> CoatPaint {
+        if dither_threshold < self.streak_marks.streak_fin_strength
+            && (is_on_rim || along_fraction > STREAK_FIN_START_FRACTION)
+        {
+            return CoatPaint::plain(self.koi_body.select_streak_fin_ramp());
+        }
+        let plain_fin_ramp = self.koi_body.select_fin_ramp();
         match self.pigment_shares.get(2) {
             Some(&(tertiary_pigment, _))
                 if along_fraction < FIN_ROOT_TINT_FRACTION && lateral_fraction.abs() < 0.85 =>
             {
-                self.develop_ramp(
+                let tint_ramp = self.develop_ramp(
                     tertiary_pigment,
                     self.koi_body.select_pigment_ramp(tertiary_pigment),
                     dither_threshold,
-                )
+                );
+                if tint_ramp == plain_fin_ramp {
+                    CoatPaint::plain(tint_ramp)
+                } else {
+                    CoatPaint {
+                        saturation: self.calculate_vibrancy_saturation(),
+                        ..CoatPaint::plain(tint_ramp)
+                    }
+                }
             }
-            _ => self.koi_body.select_fin_ramp(),
+            _ => CoatPaint::plain(plain_fin_ramp),
         }
+    }
+
+    /// Dull language colors darken and vivid ones brighten, except black, which never
+    /// lightens.
+    fn calculate_vibrancy_shift(&self, pigment: Pigment) -> f64 {
+        let color_vibrancy = self.streak_marks.color_vibrancy;
+        if color_vibrancy < 1.0 {
+            -DULL_DARKENING * (1.0 - color_vibrancy)
+        } else if pigment == Pigment::Sumi {
+            0.0
+        } else {
+            VIVID_BRIGHTENING * (color_vibrancy - 1.0)
+        }
+    }
+
+    /// Dull language colors pull toward their own gray; vivid ones push away from it.
+    fn calculate_vibrancy_saturation(&self) -> f64 {
+        let color_vibrancy = self.streak_marks.color_vibrancy;
+        if color_vibrancy < 1.0 {
+            DULL_SATURATION + (1.0 - DULL_SATURATION) * color_vibrancy
+        } else {
+            1.0 + VIVID_SATURATION_GAIN * (color_vibrancy - 1.0)
+        }
+    }
+
+    /// Gin-rin: scattered scales on the color patches glint, more as glimmer builds.
+    fn is_glinting(
+        &self,
+        along_fraction: f64,
+        lateral_fraction: f64,
+        body_length_pixels: f64,
+        half_width_pixels: f64,
+    ) -> bool {
+        const GLINT_SPAN: Range<f64> = 0.14..0.74;
+        const GLINT_LATERAL_LIMIT: f64 = 0.86;
+        // Share of scales that glint at full glimmer.
+        const FULL_GLINT_SHARE: f64 = 0.36;
+        let glimmer_strength = self.streak_marks.glimmer_strength;
+        if glimmer_strength <= 0.0
+            || !GLINT_SPAN.contains(&along_fraction)
+            || lateral_fraction.abs() >= GLINT_LATERAL_LIMIT
+        {
+            return false;
+        }
+        let scale_row = (lateral_fraction + 1.0) * half_width_pixels / 2.0;
+        let scale_column =
+            along_fraction * body_length_pixels / 2.4 + scale_row.floor().rem_euclid(2.0) * 0.5;
+        hash_lattice_point(
+            self.identity_seed ^ 0x6119,
+            scale_column.floor() as i64,
+            scale_row.floor() as i64,
+        ) < glimmer_strength * FULL_GLINT_SHARE
+            && scale_row.fract() < 0.5
+            && scale_column.fract() < 0.42
     }
 
     /// Blend the organic patch scores with the variety layout's vote; the white ground

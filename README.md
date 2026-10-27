@@ -172,8 +172,21 @@ white on Asagi, yellow becomes platinum on gold and gold on platinum, and tea
 draws every pigment in earthy tones. Black and Asagi also brighten yellow, and
 black turns blue sky blue. Gold and platinum catch a metallic sheen on the bare
 body, never on the color patches. A koi without counted languages shows its
-plain body. Streak markings are not painted yet. Pigment rules, bodies, and
-palettes live in `src/coat.rs`.
+plain body. Pigment rules, bodies, and palettes live in `src/coat.rs`.
+
+Streak markings come from `markings::calculate_streak_marks`, which measures
+time against the development's observation date and reads no clock. The current
+streak fills a dithered share of the fin rims and tips with the body's streak
+color: gold on white, black, tea, and platinum, and red on Asagi and gold. The
+fins fill in linearly to full after 13 weeks. Once the streak ends, they fade
+from the strength they reached and are gone 6.5 weeks after the recorded end
+date, with 59% left after 1 week, 34% after 2, and 10% after 4. The longest
+streak changes only the language colors, on a log curve: dull at first, normal
+by 4 weeks, and extra bright and vivid by 52 weeks, with black never lightening.
+From 1 to 4 years, gin-rin glints build on the color patches. The longest streak
+never shrinks, so these marks never fade. Mark timings live in
+`src/markings.rs`; exercise them with
+`cargo test --offline --locked --test markings`.
 
 Every growth level shares a square native canvas. `output::encode_png` exports
 it with exact 2x pixel scaling, preserving crisp edges and transparency.
@@ -192,10 +205,12 @@ Exercise the rendering and encoding boundary with
 
 The generated library shows one-, two-, three-, and four-language mixes on the
 default white body, then each body with one language per pigment, across growth
-samples. Each sample is a transparent PNG/SVG pair, and the mixes and bodies
-each get light and dark comparison sheets. The mixes use real GitHub language
-colors on a synthetic account, so the samples show the color rule, the variety
-layouts, the body palettes, and the pale young stage.
+samples with normal colors and no streak fins. Streak marking samples follow:
+current and longest streaks, then every body without and with marks. Each sample
+is a transparent PNG/SVG pair, and the mixes, bodies, and markings each get
+light and dark comparison sheets. The mixes use real GitHub language colors on a
+synthetic account, so the samples show the color rule, the variety layouts, the
+body palettes, the pale young stage, and the streak marks.
 
 Generate the library from the repository root, then open `library/README.md`.
 Git ignores the generated files.
