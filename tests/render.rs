@@ -59,17 +59,50 @@ fn patch_rendering_uses_the_full_account_identity() {
 fn growth_slows_and_keeps_the_whole_fish_inside_a_transparent_frame() {
     let mut koi_development = read_fixture_development();
     let mut visible_widths = BTreeMap::new();
-    for contribution_total in [0, 500, 1_000, 1_500, 2_000, 12_750, 100_000] {
+    let mut visible_heights = BTreeMap::new();
+    let mut area_per_squared_width = BTreeMap::new();
+    let mut maximum_frame = None;
+    for contribution_total in [
+        0,
+        500,
+        1_000,
+        1_500,
+        2_000,
+        12_750,
+        25_000,
+        50_000,
+        75_000,
+        100_000,
+        u64::MAX,
+    ] {
         koi_development.total_contributions = contribution_total;
         let koi_frame = render_base_koi(&koi_development);
         let opaque_bounds = measure_opaque_bounds(&koi_frame);
         assert!(opaque_bounds.left_x > 0 && opaque_bounds.top_y > 0);
         assert!(opaque_bounds.right_x < FRAME_WIDTH_PIXELS - 1);
         assert!(opaque_bounds.bottom_y < FRAME_HEIGHT_PIXELS - 1);
-        visible_widths.insert(
+        let visible_width_pixels = opaque_bounds.right_x - opaque_bounds.left_x + 1;
+        visible_widths.insert(contribution_total, visible_width_pixels);
+        visible_heights.insert(
             contribution_total,
-            opaque_bounds.right_x - opaque_bounds.left_x + 1,
+            opaque_bounds.bottom_y - opaque_bounds.top_y + 1,
         );
+        let opaque_pixel_count = koi_frame
+            .as_rgba_bytes()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel_channels| pixel_channels[3] != 0)
+            .count();
+        area_per_squared_width.insert(
+            contribution_total,
+            opaque_pixel_count as f64 / f64::from(visible_width_pixels).powi(2),
+        );
+        if contribution_total == 100_000 {
+            maximum_frame = Some(koi_frame);
+        } else if contribution_total > 100_000 {
+            assert_eq!(Some(koi_frame), maximum_frame);
+        }
     }
     let growth_widths: Vec<_> = visible_widths.values().copied().collect();
     assert!(
@@ -80,7 +113,11 @@ fn growth_slows_and_keeps_the_whole_fish_inside_a_transparent_frame() {
     assert!(
         visible_widths[&500] - visible_widths[&0] > visible_widths[&2_000] - visible_widths[&1_500]
     );
-    assert_eq!(visible_widths[&12_750], visible_widths[&100_000]);
+    for contribution_pair in [12_750, 25_000, 50_000, 75_000, 100_000].windows(2) {
+        assert!(visible_widths[&contribution_pair[0]] < visible_widths[&contribution_pair[1]]);
+        assert!(visible_heights[&contribution_pair[0]] < visible_heights[&contribution_pair[1]]);
+    }
+    assert!(area_per_squared_width[&100_000] > area_per_squared_width[&12_750]);
 }
 
 #[test]

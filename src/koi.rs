@@ -69,13 +69,19 @@ pub fn derive_koi_development(
     })
 }
 
-/// Map total contributions to a bounded growth fraction with diminishing gains.
+/// Young koi grow into the adult head, eyes, body width, and fins by this total.
+pub const YOUNG_SHAPE_CONTRIBUTIONS: u64 = 1_500;
+pub const ADULT_CONTRIBUTIONS: u64 = 12_750;
+pub const MAX_GROWTH_CONTRIBUTIONS: u64 = 100_000;
+
+/// Map total contributions to a growth fraction from zero through one.
+/// Gains diminish until MAX_GROWTH_CONTRIBUTIONS; larger totals stay at one.
 /// The caller supplies the observed total; elapsed time does not affect growth.
 pub fn calculate_growth_fraction(total_contributions: u64) -> f64 {
     const CONTRIBUTION_SCALE: f64 = 50.0;
-    const DOUBLINGS_TO_FULL_SIZE: f64 = 8.0;
-    ((1.0 + total_contributions as f64 / CONTRIBUTION_SCALE).log2() / DOUBLINGS_TO_FULL_SIZE)
-        .min(1.0)
+    let bounded_total = total_contributions.min(MAX_GROWTH_CONTRIBUTIONS);
+    (1.0 + bounded_total as f64 / CONTRIBUTION_SCALE).log2()
+        / (1.0 + MAX_GROWTH_CONTRIBUTIONS as f64 / CONTRIBUTION_SCALE).log2()
 }
 
 #[derive(Debug, Eq, PartialEq)]

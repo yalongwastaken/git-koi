@@ -2,7 +2,10 @@ use std::{env, error::Error, fs, path::Path, process::ExitCode};
 
 use git_koi::coat::CoatPattern;
 use git_koi::history::AccountSnapshot;
-use git_koi::koi::derive_koi_development;
+use git_koi::koi::{
+    ADULT_CONTRIBUTIONS, MAX_GROWTH_CONTRIBUTIONS, YOUNG_SHAPE_CONTRIBUTIONS,
+    derive_koi_development,
+};
 use git_koi::output::{
     STATIC_EXPORT_SCALE, STATIC_HEIGHT_PIXELS, STATIC_WIDTH_PIXELS, encode_png, encode_svg,
 };
@@ -15,7 +18,14 @@ const COAT_SAMPLES: [(&str, CoatPattern); 5] = [
     ("tancho", CoatPattern::Tancho),
     ("asagi", CoatPattern::Asagi),
 ];
-const GROWTH_SAMPLES: [(&str, u64); 3] = [("small", 0), ("medium", 1_500), ("large", 12_750)];
+const GROWTH_SAMPLES: [u64; 6] = [
+    0,
+    500,
+    YOUNG_SHAPE_CONTRIBUTIONS,
+    ADULT_CONTRIBUTIONS,
+    50_000,
+    MAX_GROWTH_CONTRIBUTIONS,
+];
 const USAGE: &str = "Usage: generate-library OUTPUT_DIRECTORY
 Write reproducible PNGs, SVGs, and an index; replace matching files, preserve others.
 Success is silent. Errors go to stderr and exit 1; invalid usage exits 2.
@@ -54,19 +64,21 @@ fn generate_library(output_directory: &Path) -> Result<(), Box<dyn Error>> {
             "## {}\n\n",
             coat_name[..1].to_uppercase() + &coat_name[1..]
         ));
-        for (size_name, contribution_total) in GROWTH_SAMPLES {
+        for contribution_total in GROWTH_SAMPLES {
             koi_development.total_contributions = contribution_total;
             let koi_frame = render_patterned_koi(&koi_development, coat_pattern);
-            let file_name = format!("{coat_name}-{size_name}.png");
+            let file_name = format!("{coat_name}-{contribution_total}.png");
             write_artifact(output_directory, &file_name, &encode_png(&koi_frame)?)?;
-            let svg_name = format!("{coat_name}-{size_name}.svg");
+            let svg_name = format!("{coat_name}-{contribution_total}.svg");
             write_artifact(
                 output_directory,
                 &svg_name,
                 encode_svg(&koi_frame).as_bytes(),
             )?;
             index_markdown.push_str(&format!(
-                "![{coat_name} {size_name}]({file_name})\n\n[SVG]({svg_name})\n\n"
+                "### {contribution_total} Contributions\n\n\
+                ![{coat_name} at {contribution_total} contributions]({file_name})\n\n\
+                [SVG]({svg_name})\n\n"
             ));
             rendered_frames.push(koi_frame);
         }
@@ -96,16 +108,15 @@ fn build_index_header(identity_seed: u64) -> String {
         selection is not a GitHub language or streak mapping.\n\n\
         Regenerate with the command in the\n\
         [repository README](../README.md#koi-library).\n\n\
-        Overview columns run from small to large. Rows follow the coat order below.\n\n\
+        Overview columns follow the contribution totals below, from left to right. Rows\n\
+        follow the coat order. These are samples of continuous growth.\n\n\
         [Light overview](overview-light.png) · [Dark overview](overview-dark.png)\n\n\
         Native canvas: {FRAME_WIDTH_PIXELS} × {FRAME_HEIGHT_PIXELS}.\n\n\
         PNG and SVG exports: {STATIC_WIDTH_PIXELS} × {STATIC_HEIGHT_PIXELS}.\n\n\
         Identity seed: {identity_seed}.\n\n"
     );
-    for (size_name, contribution_total) in GROWTH_SAMPLES {
-        index_markdown.push_str(&format!(
-            "- {size_name}: {contribution_total} contributions\n"
-        ));
+    for contribution_total in GROWTH_SAMPLES {
+        index_markdown.push_str(&format!("- {contribution_total} contributions\n"));
     }
     index_markdown.push('\n');
     index_markdown
