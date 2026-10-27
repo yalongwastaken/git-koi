@@ -9,7 +9,7 @@ use git_koi::history::{
     ContributionHistoryError, LanguageColor, calculate_language_shares, summarize_contributions,
 };
 use git_koi::koi::derive_koi_development;
-use git_koi::render::render_base_koi;
+use git_koi::render::render_koi;
 use serde_json::{Value, json};
 
 const LOGIN: &str = "synthetic-koi";
@@ -43,7 +43,7 @@ fn collected_snapshot_covers_every_page_and_day_and_renders() {
         .sum();
     assert_eq!(contribution_summary.total_contributions, expected_total);
 
-    let koi_frame = render_base_koi(&derive_koi_development(&account_snapshot).unwrap());
+    let koi_frame = render_koi(&derive_koi_development(&account_snapshot).unwrap());
     assert!(
         koi_frame
             .as_rgba_bytes()

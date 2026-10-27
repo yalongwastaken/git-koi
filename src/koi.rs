@@ -87,6 +87,8 @@ pub fn derive_koi_development(
     })
 }
 
+/// Young koi show their language pigments pale until this total.
+pub const FULL_COLOR_CONTRIBUTIONS: u64 = 500;
 /// Young koi grow into the adult head, eyes, body width, and fins by this total.
 pub const YOUNG_SHAPE_CONTRIBUTIONS: u64 = 1_500;
 pub const ADULT_CONTRIBUTIONS: u64 = 12_750;

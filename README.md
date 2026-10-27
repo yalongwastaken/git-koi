@@ -134,10 +134,10 @@ The model contains measurements, not pixels, growth thresholds, or fade
 durations. See [the development contract](src/koi.rs) and exercise its public
 interface with `cargo test --offline --locked --test koi`.
 
-### Base Koi Rendering
+### Koi Rendering
 
-`render::render_base_koi` draws a slim koi with a pale Classic coat, colored
-outlines, and dithered shading into a transparent pixel frame. The body and fins
+`render::render_koi` draws a slim koi colored from its languages, with colored
+outlines and dithered shading, into a transparent pixel frame. The body and fins
 follow sampled curves, with shading that follows the body surface and fin rays
 that follow each fin’s direction. The head widens from a round nose along a
 gentle slant, and short pixel whiskers angle forward from the snout.
@@ -151,6 +151,20 @@ retains its anatomy at higher totals. Growth reference points live in
 alone do not change its base anatomy. The pose and framing account for the body
 and fins.
 
+Each language's GitHub color becomes the koi pigment nearest in hue: red (beni),
+orange (orenji), yellow (ki), or blue (ai). Grays and languages without a color
+become black (sumi). Languages on the same pigment add their shares, and equal
+shares rank red, black, yellow, orange, then blue. Organic patches seeded by the
+account give each pigment body area in proportion to its share, pulled a quarter
+of the way toward the top pigment's classic variety: red plates, black
+lightning, a netted blue back, or a netted solid yellow or orange coat. The
+second pigment adds spots, or red, orange, or yellow sides under a blue back;
+the third tints the fin roots. Young koi show their pigments pale until the
+full-color reference point: red, orange, yellow, and blue come in first, and
+black last. The body stays white, so a koi without counted languages is plain
+white, and streak markings are not painted yet. Pigment rules and palettes live
+in `src/coat.rs`.
+
 Every growth level shares a square native canvas. `output::encode_png` exports
 it with exact 2x pixel scaling, preserving crisp edges and transparency.
 `output::encode_svg` returns a self-contained vector document of the same pixels
@@ -159,19 +173,17 @@ neighboring equal pixels into row rectangles. Canvas dimensions live in
 `src/render.rs`; static export dimensions derive from them in `src/output.rs`.
 
 Rendering and encoding are deterministic and leave file access and publication
-to the caller. This base renderer does not paint language or streak markings.
+to the caller.
 
 Exercise the rendering and encoding boundary with
 `cargo test --offline --locked --test render`.
 
 ### Koi Library
 
-The generated library shows the supported coats across growth samples, with
-transparent PNG/SVG pairs and light and dark comparison sheets.
-`render::render_patterned_koi` draws an explicitly selected `coat::CoatPattern`
-using the base renderer's anatomy and lighting. The account seed shapes patch
-edges; growth preserves their body-relative positions. Language and streak
-mapping remain separate from coat selection.
+The generated library shows one-, two-, three-, and four-language mixes across
+growth samples, with transparent PNG/SVG pairs and light and dark comparison
+sheets. The mixes use real GitHub language colors on a synthetic account, so the
+samples show the color rule, the variety layouts, and the pale young stage.
 
 Generate the library from the repository root, then open `library/README.md`.
 Git ignores the generated files.
@@ -180,7 +192,7 @@ Git ignores the generated files.
 cargo run --offline --locked --example generate-library -- library
 ```
 
-The example owns the sample selection and growth totals. It uses a synthetic
+The example owns the language mixes and growth totals. It uses a synthetic
 account fixture and the production renderer and encoders. Generation replaces
 matching files; it does not remove other files. Rerun after an interrupted
 generation to repair a partial set.

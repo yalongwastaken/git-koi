@@ -1,8 +1,9 @@
-//! A curved koi with Classic shading and transparent surroundings.
+//! A curved koi colored from its languages, with Classic shading and transparent
+//! surroundings.
 
 use std::f64::consts::{PI, TAU};
 
-use crate::coat::{CoatPattern, WHITE_RAMP, select_body_ramp, select_fin_ramp};
+use crate::coat::{KoiCoat, WHITE_RAMP};
 use crate::koi::{
     ADULT_CONTRIBUTIONS, KoiDevelopment, YOUNG_SHAPE_CONTRIBUTIONS, calculate_growth_fraction,
 };
@@ -22,29 +23,22 @@ impl KoiFrame {
     }
 }
 
-/// Render contribution-driven growth in a centered, fixed swimming pose.
-/// Language and streak markings are not painted by this base renderer. Identical
-/// inputs produce identical pixels without I/O, clock reads, or input mutation.
-pub fn render_base_koi(koi_development: &KoiDevelopment) -> KoiFrame {
-    render_patterned_koi(koi_development, CoatPattern::Plain)
-}
-
-/// Render a supported coat on the same anatomy and pose as the base koi.
-/// The account seed shapes patch edges in body coordinates, so growth does not
-/// reroll the pattern. The caller selects the coat; languages and streaks do not
-/// select or modify it. Identical inputs produce identical pixels without I/O.
-pub fn render_patterned_koi(
-    koi_development: &KoiDevelopment,
-    coat_pattern: CoatPattern,
-) -> KoiFrame {
+/// Render the koi in a centered, fixed swimming pose, colored from its languages.
+/// Contribution totals set its size and how far its colors have come in. The account
+/// seed places patches in body coordinates, so growth does not reroll the pattern.
+/// Streak markings are not painted. Identical inputs produce identical pixels without
+/// I/O, clock reads, or input mutation.
+pub fn render_koi(koi_development: &KoiDevelopment) -> KoiFrame {
     let koi_anatomy = calculate_anatomy(koi_development.total_contributions);
+    let koi_coat = KoiCoat::new(koi_development, |along_fraction| {
+        calculate_body_half_width(along_fraction, &koi_anatomy)
+    });
     let body_spine = build_spine(&koi_anatomy);
     let fin_curves = build_fins(&body_spine, &koi_anatomy);
     let pose_center = calculate_pose_center(&body_spine, &fin_curves);
     let koi_appearance = KoiAppearance {
         koi_anatomy: &koi_anatomy,
-        identity_seed: koi_development.identity_seed,
-        coat_pattern,
+        koi_coat: &koi_coat,
     };
     let mut rgba_pixels = Vec::with_capacity((FRAME_WIDTH_PIXELS * FRAME_HEIGHT_PIXELS) as usize);
     for pixel_y in 0..FRAME_HEIGHT_PIXELS {
@@ -89,8 +83,7 @@ struct KoiAnatomy {
 
 struct KoiAppearance<'a> {
     koi_anatomy: &'a KoiAnatomy,
-    identity_seed: u64,
-    coat_pattern: CoatPattern,
+    koi_coat: &'a KoiCoat,
 }
 
 // Positions and half widths are pixels; consecutive points form tapered strokes.
@@ -500,7 +493,7 @@ fn sample_koi(
     }
     for fin_curve in fin_curves {
         if let Some(fin_sample) = sample_curve(fin_curve, sample_position) {
-            return shade_fin(&fin_sample, pixel_position, koi_appearance.coat_pattern);
+            return shade_fin(&fin_sample, pixel_position, koi_appearance.koi_coat);
         }
     }
     [0; 4]
@@ -551,13 +544,12 @@ fn shade_body(
     let koi_anatomy = koi_appearance.koi_anatomy;
     let body_length_pixels = koi_anatomy.body_length_pixels;
     let lateral_fraction = body_sample.lateral_pixels / body_sample.half_width_pixels;
-    let shade_ramp = select_body_ramp(
-        koi_appearance.coat_pattern,
-        koi_appearance.identity_seed,
+    let shade_ramp = koi_appearance.koi_coat.select_body_ramp(
         body_sample.along_fraction,
         lateral_fraction,
         body_length_pixels,
         body_sample.half_width_pixels,
+        calculate_dither_threshold(pixel_position),
     );
     const INNER_RIM_PIXELS: f64 = 0.8;
     if body_sample.distance_pixels > body_sample.half_width_pixels - INNER_RIM_PIXELS {
@@ -614,18 +606,14 @@ fn calculate_body_brightness(
     surface_brightness
 }
 
-fn shade_fin(
-    fin_sample: &CurveSample,
-    pixel_position: [u32; 2],
-    coat_pattern: CoatPattern,
-) -> [u8; 4] {
+fn shade_fin(fin_sample: &CurveSample, pixel_position: [u32; 2], koi_coat: &KoiCoat) -> [u8; 4] {
     const FIN_RIM_PIXELS: f64 = 0.6;
     const FIN_RAY_SPACING_PIXELS: f64 = 1.8;
     const FIN_ROOT_SHADOW: f64 = 0.12;
-    let shade_ramp = select_fin_ramp(
-        coat_pattern,
+    let shade_ramp = koi_coat.select_fin_ramp(
         fin_sample.along_fraction,
         fin_sample.lateral_pixels / fin_sample.half_width_pixels,
+        calculate_dither_threshold(pixel_position),
     );
     if fin_sample.distance_pixels > fin_sample.half_width_pixels - FIN_RIM_PIXELS {
         return shade_ramp[1];
@@ -707,10 +695,15 @@ fn choose_shade(
 ) -> [u8; 4] {
     let shade_position = surface_brightness.clamp(0.0, 1.0) * (shade_ramp.len() - 1) as f64;
     let base_index = shade_position.floor() as usize;
+    let shade_index = base_index
+        + usize::from(shade_position.fract() > calculate_dither_threshold(pixel_position));
+    shade_ramp[shade_index.min(shade_ramp.len() - 1)]
+}
+
+/// The ordered-dither threshold at a pixel, from zero through one.
+fn calculate_dither_threshold(pixel_position: [u32; 2]) -> f64 {
     let dither_x = pixel_position[0] as usize % DITHER_RANKS[0].len();
     let dither_y = pixel_position[1] as usize % DITHER_RANKS.len();
-    let dither_threshold = (f64::from(DITHER_RANKS[dither_y][dither_x]) + 0.5)
-        / (DITHER_RANKS.len() * DITHER_RANKS[0].len()) as f64;
-    let shade_index = base_index + usize::from(shade_position.fract() > dither_threshold);
-    shade_ramp[shade_index.min(shade_ramp.len() - 1)]
+    (f64::from(DITHER_RANKS[dither_y][dither_x]) + 0.5)
+        / (DITHER_RANKS.len() * DITHER_RANKS[0].len()) as f64
 }

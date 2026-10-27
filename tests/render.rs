@@ -1,58 +1,142 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
 use chrono::Days;
-use git_koi::coat::CoatPattern;
-use git_koi::history::{AccountSnapshot, ContributionDay};
-use git_koi::koi::{KoiDevelopment, derive_koi_development};
-use git_koi::output::encode_png;
-use git_koi::render::{
-    FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, KoiFrame, render_base_koi, render_patterned_koi,
+use git_koi::history::{AccountSnapshot, ContributionDay, LanguageColor};
+use git_koi::koi::{
+    ADULT_CONTRIBUTIONS, FULL_COLOR_CONTRIBUTIONS, KoiDevelopment, MAX_GROWTH_CONTRIBUTIONS,
+    derive_koi_development,
 };
+use git_koi::output::encode_png;
+use git_koi::render::{FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, KoiFrame, render_koi};
+
+type LanguageMix<'a> = &'a [(&'a str, Option<&'a str>, f64)];
+
+const RED_MIX: LanguageMix = &[("C++", Some("#f34b7d"), 1.0)];
+const FOUR_LANGUAGE_MIX: LanguageMix = &[
+    ("C", Some("#555555"), 0.25),
+    ("Python", Some("#3572a5"), 0.25),
+    ("C++", Some("#f34b7d"), 0.25),
+    ("JavaScript", Some("#f1e05a"), 0.25),
+];
 
 #[test]
-fn supported_coats_repeat_without_changing_growth_or_transparency() {
-    let mut koi_development = read_fixture_development();
-    koi_development.total_contributions = 1_500;
-    let base_frame = render_base_koi(&koi_development);
-    let mut distinct_images = std::collections::BTreeSet::new();
-    for coat_pattern in [
-        CoatPattern::Kohaku,
-        CoatPattern::Sanke,
-        CoatPattern::Showa,
-        CoatPattern::Tancho,
-        CoatPattern::Asagi,
+fn language_mixes_color_the_same_fish_reproducibly() {
+    let uncolored_frame = render_koi(&develop_with_languages(1_500, &[]));
+    let mut distinct_images = BTreeSet::new();
+    for language_mix in [
+        RED_MIX,
+        &[
+            ("Python", Some("#3572a5"), 0.65),
+            ("C", Some("#555555"), 0.35),
+        ],
+        &[
+            ("TypeScript", Some("#3178c6"), 0.45),
+            ("C++", Some("#f34b7d"), 0.35),
+            ("Shell", Some("#89e051"), 0.2),
+        ],
+        FOUR_LANGUAGE_MIX,
+        &[("Rust", Some("#dea584"), 1.0)],
     ] {
-        let patterned_frame = render_patterned_koi(&koi_development, coat_pattern);
-        assert_ne!(patterned_frame, base_frame);
-        for (base_pixel, patterned_pixel) in base_frame
+        let koi_frame = render_koi(&develop_with_languages(1_500, language_mix));
+        assert_ne!(koi_frame, uncolored_frame);
+        for (uncolored_pixel, colored_pixel) in uncolored_frame
             .as_rgba_bytes()
             .as_chunks::<4>()
             .0
             .iter()
-            .zip(patterned_frame.as_rgba_bytes().as_chunks::<4>().0.iter())
+            .zip(koi_frame.as_rgba_bytes().as_chunks::<4>().0.iter())
         {
-            assert_eq!(base_pixel[3], patterned_pixel[3]);
+            assert_eq!(uncolored_pixel[3], colored_pixel[3]);
         }
-        let png_bytes = encode_png(&patterned_frame).unwrap();
+        let png_bytes = encode_png(&koi_frame).unwrap();
         assert_eq!(
             png_bytes,
-            encode_png(&render_patterned_koi(&koi_development, coat_pattern)).unwrap()
+            encode_png(&render_koi(&develop_with_languages(1_500, language_mix))).unwrap()
         );
         assert!(distinct_images.insert(png_bytes));
     }
 }
 
 #[test]
-fn patch_rendering_uses_the_full_account_identity() {
-    let mut koi_development = read_fixture_development();
-    koi_development.total_contributions = 1_500;
-    let original_frame = render_patterned_koi(&koi_development, CoatPattern::Sanke);
-    koi_development.identity_seed += 1_u64 << 32;
-    assert_ne!(
-        original_frame,
-        render_patterned_koi(&koi_development, CoatPattern::Sanke)
+fn languages_on_one_pigment_share_its_patches() {
+    let render_mix =
+        |language_mix| render_koi(&develop_with_languages(ADULT_CONTRIBUTIONS, language_mix));
+    // Python and TypeScript are both blue; C's gray and a missing color are both black.
+    assert_eq!(
+        render_mix(&[
+            ("Python", Some("#3572a5"), 0.5),
+            ("TypeScript", Some("#3178c6"), 0.5),
+        ]),
+        render_mix(&[("Python", Some("#3572a5"), 1.0)])
     );
+    assert_eq!(
+        render_mix(&[("C", Some("#555555"), 1.0)]),
+        render_mix(&[("Unrecognized", None, 1.0)])
+    );
+    assert_ne!(
+        render_mix(&[
+            ("Python", Some("#3572a5"), 0.5),
+            ("Rust", Some("#dea584"), 0.5),
+        ]),
+        render_mix(&[("Python", Some("#3572a5"), 1.0)])
+    );
+}
+
+#[test]
+fn equal_pigment_shares_tie_despite_rounding() {
+    let render_mix =
+        |language_mix| render_koi(&develop_with_languages(ADULT_CONTRIBUTIONS, language_mix));
+    // Orange sums to 0.30000000000000004 here; it still ties with yellow, so yellow
+    // keeps its place and gives the blue koi its sides.
+    assert_eq!(
+        render_mix(&[
+            ("Python", Some("#3572a5"), 0.4),
+            ("Rust", Some("#dea584"), 0.1),
+            ("Java", Some("#b07219"), 0.2),
+            ("JavaScript", Some("#f1e05a"), 0.3),
+        ]),
+        render_mix(&[
+            ("Python", Some("#3572a5"), 0.4),
+            ("Java", Some("#b07219"), 0.3),
+            ("JavaScript", Some("#f1e05a"), 0.3),
+        ])
+    );
+}
+
+#[test]
+fn the_same_languages_form_different_patches_on_another_account() {
+    let mut koi_development = develop_with_languages(ADULT_CONTRIBUTIONS, FOUR_LANGUAGE_MIX);
+    let original_frame = render_koi(&koi_development);
+    koi_development.identity_seed += 1_u64 << 32;
+    assert_ne!(original_frame, render_koi(&koi_development));
+}
+
+#[test]
+fn young_koi_show_pale_pigments_until_full_color() {
+    let collect_mix_colors = |contribution_total, language_mix| {
+        collect_opaque_colors(&render_koi(&develop_with_languages(
+            contribution_total,
+            language_mix,
+        )))
+    };
+    let full_colors = collect_mix_colors(MAX_GROWTH_CONTRIBUTIONS, RED_MIX);
+    let red_colors: BTreeSet<_> = full_colors
+        .difference(&collect_mix_colors(MAX_GROWTH_CONTRIBUTIONS, &[]))
+        .copied()
+        .collect();
+    let pale_colors: BTreeSet<_> = collect_mix_colors(0, RED_MIX)
+        .difference(&collect_mix_colors(0, &[]))
+        .filter(|pixel_color| !full_colors.contains(*pixel_color))
+        .copied()
+        .collect();
+    assert!(!pale_colors.is_empty());
+    let midway_colors = collect_mix_colors(100, RED_MIX);
+    assert!(!midway_colors.is_disjoint(&pale_colors));
+    assert!(!midway_colors.is_disjoint(&red_colors));
+    for contribution_total in [FULL_COLOR_CONTRIBUTIONS, ADULT_CONTRIBUTIONS] {
+        assert!(collect_mix_colors(contribution_total, RED_MIX).is_disjoint(&pale_colors));
+    }
 }
 
 #[test]
@@ -76,7 +160,7 @@ fn growth_slows_and_keeps_the_whole_fish_inside_a_transparent_frame() {
         u64::MAX,
     ] {
         koi_development.total_contributions = contribution_total;
-        let koi_frame = render_base_koi(&koi_development);
+        let koi_frame = render_koi(&koi_development);
         let opaque_bounds = measure_opaque_bounds(&koi_frame);
         assert!(opaque_bounds.left_x > 0 && opaque_bounds.top_y > 0);
         assert!(opaque_bounds.right_x < FRAME_WIDTH_PIXELS - 1);
@@ -124,11 +208,11 @@ fn growth_slows_and_keeps_the_whole_fish_inside_a_transparent_frame() {
 fn png_output_doubles_each_pixel_and_repeats_exactly() {
     let mut koi_development = read_fixture_development();
     koi_development.total_contributions = 1_500;
-    let koi_frame = render_patterned_koi(&koi_development, CoatPattern::Sanke);
+    let koi_frame = render_koi(&koi_development);
     let png_bytes = encode_png(&koi_frame).unwrap();
     assert_eq!(
         png_bytes,
-        encode_png(&render_patterned_koi(&koi_development, CoatPattern::Sanke)).unwrap()
+        encode_png(&render_koi(&koi_development)).unwrap()
     );
     let mut png_reader = png::Decoder::new(Cursor::new(&png_bytes))
         .read_info()
@@ -176,8 +260,8 @@ fn quiet_days_change_streak_state_without_changing_the_base_fish() {
     let quiet_development = derive_koi_development(&account_snapshot).unwrap();
     assert_ne!(active_development.streaks, quiet_development.streaks);
     assert_eq!(
-        render_base_koi(&active_development),
-        render_base_koi(&quiet_development)
+        render_koi(&active_development),
+        render_koi(&quiet_development)
     );
 }
 
@@ -185,6 +269,36 @@ fn read_fixture_development() -> KoiDevelopment {
     let account_snapshot =
         serde_json::from_str(include_str!("fixtures/account-with-history.json")).unwrap();
     derive_koi_development(&account_snapshot).unwrap()
+}
+
+fn develop_with_languages(contribution_total: u64, language_mix: LanguageMix) -> KoiDevelopment {
+    let mut koi_development = read_fixture_development();
+    koi_development.total_contributions = contribution_total;
+    koi_development.language_shares = language_mix
+        .iter()
+        .map(|&(language_name, _, language_share)| (language_name.to_owned(), language_share))
+        .collect();
+    koi_development.language_colors = language_mix
+        .iter()
+        .map(|&(language_name, color_text, _)| {
+            (
+                language_name.to_owned(),
+                color_text.map(|color_text| LanguageColor::try_from(color_text).unwrap()),
+            )
+        })
+        .collect();
+    koi_development
+}
+
+fn collect_opaque_colors(koi_frame: &KoiFrame) -> BTreeSet<[u8; 4]> {
+    koi_frame
+        .as_rgba_bytes()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel_channels| pixel_channels[3] != 0)
+        .copied()
+        .collect()
 }
 
 struct OpaqueBounds {

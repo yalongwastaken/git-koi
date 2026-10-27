@@ -1,7 +1,6 @@
 use std::{env, error::Error, fs, path::Path, process::ExitCode};
 
-use git_koi::coat::CoatPattern;
-use git_koi::history::AccountSnapshot;
+use git_koi::history::{AccountSnapshot, LanguageColor};
 use git_koi::koi::{
     ADULT_CONTRIBUTIONS, MAX_GROWTH_CONTRIBUTIONS, YOUNG_SHAPE_CONTRIBUTIONS,
     derive_koi_development,
@@ -9,14 +8,33 @@ use git_koi::koi::{
 use git_koi::output::{
     STATIC_EXPORT_SCALE, STATIC_HEIGHT_PIXELS, STATIC_WIDTH_PIXELS, encode_png, encode_svg,
 };
-use git_koi::render::{FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, KoiFrame, render_patterned_koi};
+use git_koi::render::{FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, KoiFrame, render_koi};
 
-const COAT_SAMPLES: [(&str, CoatPattern); 5] = [
-    ("kohaku", CoatPattern::Kohaku),
-    ("sanke", CoatPattern::Sanke),
-    ("showa", CoatPattern::Showa),
-    ("tancho", CoatPattern::Tancho),
-    ("asagi", CoatPattern::Asagi),
+/// Language mixes with GitHub's colors and their shares of the account's projects.
+type LanguageMix = &'static [(&'static str, &'static str, f64)];
+const LANGUAGE_SAMPLES: [(&str, LanguageMix); 4] = [
+    ("one", &[("C++", "#f34b7d", 1.0)]),
+    (
+        "two",
+        &[("Python", "#3572a5", 0.65), ("C", "#555555", 0.35)],
+    ),
+    (
+        "three",
+        &[
+            ("TypeScript", "#3178c6", 0.45),
+            ("C++", "#f34b7d", 0.35),
+            ("Shell", "#89e051", 0.2),
+        ],
+    ),
+    (
+        "four",
+        &[
+            ("C", "#555555", 0.25),
+            ("Python", "#3572a5", 0.25),
+            ("C++", "#f34b7d", 0.25),
+            ("JavaScript", "#f1e05a", 0.25),
+        ],
+    ),
 ];
 const GROWTH_SAMPLES: [u64; 6] = [
     0,
@@ -59,17 +77,34 @@ fn generate_library(output_directory: &Path) -> Result<(), Box<dyn Error>> {
     let mut index_markdown = build_index_header(koi_development.identity_seed);
     let mut rendered_frames = Vec::new();
     fs::create_dir_all(output_directory)?;
-    for (coat_name, coat_pattern) in COAT_SAMPLES {
+    for (mix_name, language_mix) in LANGUAGE_SAMPLES {
+        koi_development.language_shares.clear();
+        koi_development.language_colors.clear();
+        let mut mix_description = Vec::new();
+        for &(language_name, color_text, language_share) in language_mix {
+            koi_development
+                .language_shares
+                .insert(language_name.to_owned(), language_share);
+            koi_development.language_colors.insert(
+                language_name.to_owned(),
+                Some(LanguageColor::try_from(color_text)?),
+            );
+            mix_description.push(format!(
+                "{language_name} {:.0}% ({color_text})",
+                language_share * 100.0
+            ));
+        }
         index_markdown.push_str(&format!(
-            "## {}\n\n",
-            coat_name[..1].to_uppercase() + &coat_name[1..]
+            "## {}\n\n{}.\n\n",
+            mix_name[..1].to_uppercase() + &mix_name[1..],
+            mix_description.join(", ")
         ));
         for contribution_total in GROWTH_SAMPLES {
             koi_development.total_contributions = contribution_total;
-            let koi_frame = render_patterned_koi(&koi_development, coat_pattern);
-            let file_name = format!("{coat_name}-{contribution_total}.png");
+            let koi_frame = render_koi(&koi_development);
+            let file_name = format!("{mix_name}-{contribution_total}.png");
             write_artifact(output_directory, &file_name, &encode_png(&koi_frame)?)?;
-            let svg_name = format!("{coat_name}-{contribution_total}.svg");
+            let svg_name = format!("{mix_name}-{contribution_total}.svg");
             write_artifact(
                 output_directory,
                 &svg_name,
@@ -77,7 +112,7 @@ fn generate_library(output_directory: &Path) -> Result<(), Box<dyn Error>> {
             )?;
             index_markdown.push_str(&format!(
                 "### {contribution_total} Contributions\n\n\
-                ![{coat_name} at {contribution_total} contributions]({file_name})\n\n\
+                ![{mix_name} at {contribution_total} contributions]({file_name})\n\n\
                 [SVG]({svg_name})\n\n"
             ));
             rendered_frames.push(koi_frame);
@@ -103,13 +138,13 @@ fn generate_library(output_directory: &Path) -> Result<(), Box<dyn Error>> {
 fn build_index_header(identity_seed: u64) -> String {
     let mut index_markdown = format!(
         "# Koi Library\n\n\
-        These supported coats share the same anatomy, pose, and Classic lighting. The\n\
-        samples use a fixed synthetic account seed and explicit growth totals; coat\n\
-        selection is not a GitHub language or streak mapping.\n\n\
+        These language mixes share the same anatomy, pose, and Classic lighting. The\n\
+        samples use a fixed synthetic account seed, explicit language shares with their\n\
+        GitHub colors, and explicit growth totals.\n\n\
         Regenerate with the command in the\n\
         [repository README](../README.md#koi-library).\n\n\
         Overview columns follow the contribution totals below, from left to right. Rows\n\
-        follow the coat order. These are samples of continuous growth.\n\n\
+        follow the mix order. These are samples of continuous growth.\n\n\
         [Light overview](overview-light.png) · [Dark overview](overview-dark.png)\n\n\
         Native canvas: {FRAME_WIDTH_PIXELS} × {FRAME_HEIGHT_PIXELS}.\n\n\
         PNG and SVG exports: {STATIC_WIDTH_PIXELS} × {STATIC_HEIGHT_PIXELS}.\n\n\
@@ -130,7 +165,7 @@ fn encode_overview(
     let frame_width = FRAME_WIDTH_PIXELS as usize;
     let frame_height = FRAME_HEIGHT_PIXELS as usize;
     let overview_width = frame_width * GROWTH_SAMPLES.len() * overview_scale;
-    let overview_height = frame_height * COAT_SAMPLES.len() * overview_scale;
+    let overview_height = frame_height * LANGUAGE_SAMPLES.len() * overview_scale;
     let mut overview_pixels = background_color.repeat(overview_width * overview_height);
     for (pixel_index, pixel_channels) in overview_pixels
         .as_chunks_mut::<4>()
