@@ -1,5 +1,30 @@
 //! Koi coats colored by language pigments on a chosen body, sampled in body
 //! coordinates.
+//!
+//! Each language's GitHub color becomes the koi pigment nearest in hue: red (beni),
+//! orange (orenji), yellow (ki), or blue (ai). Grays and languages without a color
+//! become black (sumi). Languages on the same pigment add their shares, and equal
+//! shares rank red, black, yellow, orange, then blue. Organic patches seeded by the
+//! account give each pigment body area in proportion to its share, pulled partway
+//! toward the top pigment's classic variety: red plates, black lightning, a netted blue
+//! back, or a netted solid yellow or orange coat. The second pigment adds spots, or
+//! red, orange, or yellow sides under a blue back; the third tints the fin roots. Young
+//! koi show their pigments pale until [`crate::koi::FULL_COLOR_CONTRIBUTIONS`]: red,
+//! orange, yellow, and blue come in first, and black last.
+//!
+//! The caller chooses one of six [`KoiBody`] values. Each body redraws the pigments in
+//! its own palette, and a pigment that would match the ground swaps so it stays
+//! visible: black becomes white on black, blue becomes white on Asagi, yellow becomes
+//! platinum on gold and gold on platinum, and tea draws every pigment in earthy tones.
+//! Black and Asagi also brighten yellow, and black turns blue sky blue. Gold and
+//! platinum catch a metallic sheen on the bare body, never on the color patches. A koi
+//! without counted languages shows its plain body.
+//!
+//! The streak marks from [`crate::markings`] show here. The current streak fills a
+//! dithered share of the fin rims and tips with the body's streak color: gold on white,
+//! black, tea, and platinum, and red on Asagi and gold. The longest streak changes only
+//! the language colors, from dull through normal to extra bright and vivid, with black
+//! never lightening, and then gin-rin glints build on the color patches.
 
 use std::collections::BTreeMap;
 use std::ops::Range;

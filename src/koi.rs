@@ -16,13 +16,17 @@ use crate::history::{
 pub struct KoiDevelopment {
     /// The stable numeric GitHub account ID.
     pub identity_seed: u64,
+    /// Each counted language's share of eligible repositories, from zero to one, by name.
     pub language_shares: BTreeMap<String, f64>,
     /// GitHub's color for each language in `language_shares`; `None` means it has no color.
     pub language_colors: BTreeMap<String, Option<LanguageColor>>,
     /// Unweighted contributions available to the renderer's growth curve.
     pub total_contributions: u64,
+    /// The date every time-based measurement is taken against.
     pub observed_on: NaiveDate,
+    /// The longest and the most recent weekly streaks.
     pub streaks: StreakDevelopment,
+    /// Counts around the observation date that behavior selection reads.
     pub recent_activity: RecentActivity,
 }
 
@@ -42,6 +46,7 @@ pub struct RecentActivity {
     pub observation_week_contributions: Vec<u64>,
 }
 
+/// Weekly streaks: runs of consecutive Monday-Sunday weeks with at least one active day.
 #[derive(Debug, Eq, PartialEq)]
 pub struct StreakDevelopment {
     /// The earliest longest run, replaced only by a strictly longer run.
@@ -50,10 +55,14 @@ pub struct StreakDevelopment {
     pub recent: Option<RecentStreak>,
 }
 
+/// The most recent streak, still running or ended.
 #[derive(Debug, Eq, PartialEq)]
 pub enum RecentStreak {
+    /// Still running through the observation week; carries its weeks, oldest first.
     Current(Vec<ContributionWeek>),
+    /// Ended by a completed week without activity.
     Ended {
+        /// The streak's weeks, oldest first.
         weeks: Vec<ContributionWeek>,
         /// The Monday after the first wholly inactive week has completed.
         /// Further inactivity does not move this date or restart a fade.
@@ -109,7 +118,10 @@ pub fn derive_koi_development(
 pub const FULL_COLOR_CONTRIBUTIONS: u64 = 500;
 /// Young koi grow into the adult head, eyes, body width, and fins by this total.
 pub const YOUNG_SHAPE_CONTRIBUTIONS: u64 = 1_500;
+/// The adult form: past this total the body keeps lengthening and the fins and tail
+/// grow, but the anatomy is settled.
 pub const ADULT_CONTRIBUTIONS: u64 = 12_750;
+/// Growth stops here; larger totals keep the maximum form.
 pub const MAX_GROWTH_CONTRIBUTIONS: u64 = 100_000;
 
 /// Map total contributions to a growth fraction from zero through one.
@@ -122,11 +134,16 @@ pub fn calculate_growth_fraction(total_contributions: u64) -> f64 {
         / (1.0 + MAX_GROWTH_CONTRIBUTIONS as f64 / CONTRIBUTION_SCALE).log2()
 }
 
+/// Why a snapshot produced no development. Each message names the repair.
 #[derive(Debug, Eq, PartialEq)]
 pub enum KoiDevelopmentError {
+    /// The contribution history failed its rules.
     ContributionHistory(ContributionHistoryError),
+    /// Two observations of one repository disagree.
     Repositories(ConflictingRepository),
+    /// The snapshot predates language colors.
     MissingLanguageColors,
+    /// The snapshot has no color entry for this counted language.
     MissingLanguageColor(String),
 }
 

@@ -1,5 +1,21 @@
 //! A curved koi colored from its languages on a chosen body, with Classic shading and
 //! transparent surroundings.
+//!
+//! The body and fins follow sampled curves, with shading that follows the body surface
+//! and fin rays that follow each fin's direction. The head widens from a round nose
+//! along a gentle slant, and short pixel whiskers angle forward from the snout.
+//! Contribution totals set the size through [`crate::koi::calculate_growth_fraction`],
+//! and growth slows as the fish matures. Young koi have a rounder head, larger eyes, a
+//! slimmer body, and short rounded fins, and grow into the adult shape by
+//! [`crate::koi::YOUNG_SHAPE_CONTRIBUTIONS`]. After [`crate::koi::ADULT_CONTRIBUTIONS`]
+//! the body keeps lengthening, broadens slightly, and its fins and tail lengthen; the
+//! maximum form keeps its anatomy at higher totals. Quiet days alone do not change the
+//! base anatomy. The pose and framing account for the body and fins.
+//!
+//! Every growth level shares one square native canvas of [`FRAME_WIDTH_PIXELS`] by
+//! [`FRAME_HEIGHT_PIXELS`], which the encoders in [`crate::output`] scale up exactly.
+//! Anatomical proportions live here; pigments, bodies, and palettes in [`crate::coat`];
+//! streak mark strengths in [`crate::markings`]; poses in [`crate::motion`].
 
 use std::f64::consts::{PI, TAU};
 
@@ -10,7 +26,9 @@ use crate::koi::{
 };
 use crate::motion::{Course, STILL_POSE, SwimPose, calculate_swim_pose, frame_count};
 
+/// Width of the native canvas every koi is drawn on, at every growth level.
 pub const FRAME_WIDTH_PIXELS: u32 = 256;
+/// Height of the native canvas; the canvas is square.
 pub const FRAME_HEIGHT_PIXELS: u32 = FRAME_WIDTH_PIXELS;
 
 /// A renderer-owned, fixed-size frame with row-major RGBA pixels.
@@ -20,6 +38,8 @@ pub struct KoiFrame {
 }
 
 impl KoiFrame {
+    /// The pixels as bytes, row by row from the top left, four channels per pixel: red,
+    /// green, blue, alpha. The length is the canvas area times four.
     pub fn as_rgba_bytes(&self) -> &[u8] {
         self.rgba_pixels.as_flattened()
     }

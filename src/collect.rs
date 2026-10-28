@@ -18,6 +18,8 @@ use crate::history::{
 
 /// Runs one GitHub GraphQL query with string variables and returns its `data` object.
 pub trait GraphqlClient {
+    /// Run `query` with the given string variables and return the response's `data`
+    /// object. Errors carry the reason `gh` or GitHub gave.
     fn run_query(&self, query: &str, variables: &[(&str, &str)]) -> Result<Value, CollectionError>;
 }
 
@@ -330,19 +332,29 @@ fn read_bool(object: &Value, field_name: &str) -> Result<bool, CollectionError> 
     })
 }
 
+/// Why a collection produced no snapshot. Each message names the operator repair.
 #[derive(Debug, Eq, PartialEq)]
 pub enum CollectionError {
+    /// `gh` is not on `PATH`.
     GhNotInstalled,
     /// `gh` ran and failed; carries its own message (authentication, rate limits, errors).
     GhFailed(String),
+    /// GitHub has no account with this login.
     AccountNotFound(String),
+    /// GitHub answered in a shape this version does not understand; carries the detail.
     UnexpectedResponse(String),
+    /// GitHub's contribution calendar does not start on the account's creation date.
     IncompleteCalendar {
+        /// The day GitHub says the account was created.
         created_on: NaiveDate,
+        /// The first day the calendar reported, or `None` when it reported none.
         first_reported_on: Option<NaiveDate>,
     },
+    /// The collected days break the history rules; carries the rule.
     InvalidHistory(ContributionHistoryError),
+    /// Two observations of one repository disagree.
     ConflictingRepository(ConflictingRepository),
+    /// GitHub reported two colors for this language.
     ConflictingLanguageColor(String),
 }
 

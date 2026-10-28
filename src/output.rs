@@ -1,4 +1,10 @@
 //! Image and animation encoding; callers own destinations and publication.
+//!
+//! Every export is [`STATIC_EXPORT_SCALE`] times the native canvas on each side, so the
+//! pixel art stays crisp: [`encode_png`] for the still, [`encode_svg`] for a vector
+//! document of the same pixels, [`encode_gif`] for a behavior's loop, and
+//! [`encode_preview_html`] for a page that shows the GIF and PNG beside it on GitHub's
+//! light and dark page colors.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -8,8 +14,11 @@ use std::fmt;
 use crate::motion::FRAMES_PER_SECOND;
 use crate::render::{FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, KoiFrame};
 
+/// Each native pixel becomes this many export pixels on each side.
 pub const STATIC_EXPORT_SCALE: u32 = 2;
+/// Width of every exported image.
 pub const STATIC_WIDTH_PIXELS: u32 = FRAME_WIDTH_PIXELS * STATIC_EXPORT_SCALE;
+/// Height of every exported image.
 pub const STATIC_HEIGHT_PIXELS: u32 = FRAME_HEIGHT_PIXELS * STATIC_EXPORT_SCALE;
 
 /// Encode a static PNG by repeating each native pixel in both dimensions.
@@ -226,13 +235,19 @@ fn calculate_elapsed_hundredths(frame_index: usize) -> u16 {
         .expect("loops last under ten minutes")
 }
 
+/// Why a GIF was not produced.
 #[derive(Debug)]
 pub enum GifEncodingError {
+    /// No frames were given.
     NoFrames,
+    /// A frame has more opaque colors than one GIF palette holds.
     TooManyColors {
+        /// The frame, counted from zero.
         frame_index: usize,
     },
+    /// A frame has a pixel that is neither opaque nor fully transparent.
     PartialTransparency {
+        /// The frame, counted from zero.
         frame_index: usize,
     },
     /// The GIF encoder failed; carries its own error.

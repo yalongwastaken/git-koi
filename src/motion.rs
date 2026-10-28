@@ -4,6 +4,7 @@ use std::f64::consts::{PI, TAU};
 
 use crate::behavior::Behavior;
 
+/// Frames per second of every behavior's loop; GIF frame delays derive from it.
 pub const FRAMES_PER_SECOND: u32 = 15;
 
 const TAIL_BEND_PER_WAVE_STRENGTH: f64 = 0.45;
@@ -123,10 +124,15 @@ const DART_STYLE: LapStyle = LapStyle {
 pub enum Course {
     /// Clockwise around the frame center. The head's angle is measured clockwise on
     /// screen from the right; loops start with the head at the top.
-    Lap { angle_radians: f64 },
+    Lap {
+        /// Where the head is on the lap.
+        angle_radians: f64,
+    },
     /// In place, in the still pose turned by the heading offset and moved by the drift.
     Hover {
+        /// How far the still heading is turned.
         heading_offset_radians: f64,
+        /// How far the koi is moved from the hover center, in native pixels.
         drift_pixels: [f64; 2],
     },
 }
@@ -135,9 +141,11 @@ pub enum Course {
 /// then the right, as the koi sees them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwimPose {
+    /// Where the koi is in the frame.
     pub course: Course,
     /// How far under the water the koi is, from zero at the surface to one.
     pub depth: f64,
+    /// Where the body wave is in its cycle.
     pub wave_phase_radians: f64,
     /// Multiplies the still pose's wave amplitude.
     pub wave_strength: f64,

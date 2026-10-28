@@ -19,8 +19,11 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "SnapshotDocument", into = "SnapshotDocument")]
 pub struct AccountSnapshot {
+    /// GitHub's stable numeric ID for the account.
     pub account_id: u64,
+    /// Every repository observation the collector supplied, owned or contributed to.
     pub repositories: Vec<RepositoryObservation>,
+    /// Daily contributions through an observation date; `None` before snapshot version 2.
     pub contribution_history: Option<ContributionHistory>,
     /// GitHub's color for each observed language name; `None` means GitHub has no color.
     pub language_colors: Option<BTreeMap<String, Option<LanguageColor>>>,
@@ -74,22 +77,30 @@ impl<'de> Deserialize<'de> for LanguageColor {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContributionHistory {
+    /// The last day the history covers, inclusive.
     pub observed_on: NaiveDate,
+    /// One entry per observed day, complete from the first entry through `observed_on`.
     pub days: Vec<ContributionDay>,
 }
 
+/// GitHub's contribution count for one day.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContributionDay {
+    /// The day, in GitHub's UTC calendar.
     pub date: NaiveDate,
+    /// Contributions GitHub counted on that day.
     pub contribution_count: u32,
 }
 
 /// Derived measurements; these are not stored alongside source observations.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ContributionSummary {
+    /// The observation date of the summarized history.
     pub observed_on: NaiveDate,
+    /// Every counted contribution, unweighted.
     pub total_contributions: u64,
+    /// Chronological Monday-Sunday weeks, including observed weeks with no activity.
     pub weeks: Vec<ContributionWeek>,
     /// One count per date, in order, from the first observation through the
     /// observation date, with identical duplicates merged.
@@ -101,8 +112,11 @@ pub struct ContributionSummary {
 /// A week matching the summary's observation week is still in progress.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContributionWeek {
+    /// The ISO week the participation falls in.
     pub iso_week: IsoWeek,
+    /// Observed days in the week with at least one contribution.
     pub active_day_count: u8,
+    /// Days of the week the history covers; seven for a complete week.
     pub observed_day_count: u8,
 }
 
@@ -110,8 +124,11 @@ pub struct ContributionWeek {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryObservation {
+    /// GitHub's stable numeric ID for the repository.
     pub repository_id: u64,
+    /// Who can see the repository; only public ones count toward language shares.
     pub visibility: RepositoryVisibility,
+    /// Whether the repository is a fork, which keeps it out of language shares.
     pub is_fork: bool,
     /// GitHub's language name unchanged; null means a known absence.
     /// Omitting the field is an error because absence of data is not an observation.
@@ -119,11 +136,15 @@ pub struct RepositoryObservation {
     pub primary_language: Option<String>,
 }
 
+/// A repository's visibility, as GitHub's API names it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RepositoryVisibility {
+    /// Visible to everyone.
     Public,
+    /// Visible to its collaborators.
     Private,
+    /// Visible within an enterprise.
     Internal,
 }
 
@@ -219,6 +240,7 @@ pub fn summarize_contributions(
 /// Two observations disagree about the same repository; no shares were produced.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ConflictingRepository {
+    /// The repository the observations disagree about.
     pub repository_id: u64,
 }
 
@@ -234,14 +256,21 @@ impl fmt::Display for ConflictingRepository {
 
 impl Error for ConflictingRepository {}
 
+/// Why a history could not be summarized. Each message names the repair.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ContributionHistoryError {
+    /// The snapshot has no contribution history.
     MissingHistory,
+    /// Two entries for this date carry different counts.
     ConflictingDate(NaiveDate),
+    /// An entry is dated after the observation date.
     AfterObservationDate {
+        /// The offending entry's date.
         contribution_date: NaiveDate,
+        /// The history's observation date.
         observed_on: NaiveDate,
     },
+    /// The history skips this date.
     MissingDate(NaiveDate),
 }
 

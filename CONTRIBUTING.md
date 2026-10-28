@@ -41,9 +41,25 @@ npx prettier@3.9.10 --write .
   says why in a few lines.
 - Tests sit at public boundaries and fail under the bug they name. They do not
   pin incidental details.
-- Documentation changes with the behavior it describes: doc comments and the
-  README.
+- Documentation changes with the behavior it describes: doc comments, the
+  README, and the guide in `docs/`. A change a user would notice gets a line
+  under Unreleased in [CHANGELOG.md](CHANGELOG.md).
 - Formatting changes touch only the lines the change touches.
+
+## Reviewing Rendering Changes
+
+The koi library shows every body across growth samples, language mixes, and
+streak marks, as transparent PNG and SVG pairs plus light and dark comparison
+sheets. Generate it from the repository root, then open `library/README.md`; Git
+ignores the generated files, and CI attaches a fresh library to every pull
+request as the `koi-library` artifact.
+
+```sh
+cargo run --locked --example generate-library -- library
+```
+
+When a change alters how the koi looks, copy `library/bodies-light.png` and
+`library/bodies-dark.png` into `docs/` so the README's sheet matches the code.
 
 ## Issues and Security
 
