@@ -58,11 +58,12 @@ cargo install git-koi --locked
 ```
 
 Or download the archive for your platform from the
-[releases page](https://github.com/yalongwastaken/git-koi/releases). Each
-archive has a `.sha256` file beside it; check the download with
-`shasum -a 256 -c` on macOS, `sha256sum -c` on Linux, or `certutil -hashfile` on
-Windows, then put `git-koi` on your `PATH`. macOS may refuse to open a binary it
-downloaded; `xattr -d com.apple.quarantine git-koi` clears that flag.
+[releases page](https://github.com/yalongwastaken/git-koi/releases), a `.tar.gz`
+for Linux and macOS or a `.zip` for Windows. Each archive has a `.sha256` file
+beside it; check the download with `shasum -a 256 -c` on macOS, `sha256sum -c`
+on Linux, or `certutil -hashfile` on Windows, then put `git-koi` on your `PATH`.
+macOS may refuse to open a binary it downloaded;
+`xattr -d com.apple.quarantine git-koi` clears that flag.
 
 Collection goes through the [GitHub CLI](https://cli.github.com), so install it
 and sign in once with `gh auth login`. Then:
@@ -84,7 +85,7 @@ file only after collection succeeds. In GitHub Actions, `GH_TOKEN` set to the
 workflow's token is enough. `render` draws everything in memory first and
 replaces each file through a temporary file, so a failed run keeps the previous
 files. Both print errors to standard error and exit 1; invalid usage exits 2.
-`git-koi --help` prints the full usage.
+`git-koi --help` prints the full usage and `git-koi --version` the version.
 
 ## As a Library
 

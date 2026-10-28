@@ -17,6 +17,7 @@ use git_koi::render::{KoiFrame, render_koi, render_swim_frame};
 
 const USAGE: &str = "Usage: git-koi collect LOGIN [--output FILE]
        git-koi render SNAPSHOT --output-dir DIR [--body BODY]
+       git-koi --help | --version
 Collect LOGIN's public GitHub snapshot as JSON through `gh api`: public owned and
 contributed repositories, and daily contributions from the account's creation
 through yesterday (UTC), the last complete day.
@@ -49,6 +50,10 @@ fn main() -> ExitCode {
     match argument_texts.as_slice() {
         [Some("--help")] | [Some("collect" | "render"), Some("--help")] => {
             println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        [Some("--version")] => {
+            println!("git-koi {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         [Some("collect"), Some(login)] if !login.starts_with('-') => run_collect(login, None),

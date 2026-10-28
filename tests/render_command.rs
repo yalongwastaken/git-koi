@@ -154,6 +154,16 @@ fn render_usage_errors_exit_two_and_help_exits_zero() {
     assert!(String::from_utf8_lossy(&help_output.stdout).contains("platinum"));
 }
 
+#[test]
+fn version_prints_the_manifest_version_and_exits_zero() {
+    let version_output = run_git_koi(&["--version"]);
+    assert_eq!(version_output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&version_output.stdout),
+        format!("git-koi {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}
+
 fn read_fixture_snapshot() -> AccountSnapshot {
     serde_json::from_str(&fs::read_to_string(HISTORY_FIXTURE).unwrap()).unwrap()
 }
