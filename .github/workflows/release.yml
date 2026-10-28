@@ -1,9 +1,10 @@
 name: Release
 
-# A version tag builds the binaries, publishes the GitHub Release and the crate,
-# moves the major tag the Action is referenced by, and proves the Action downloads
-# what was just released. Every step that creates something skips it when it
-# already exists, so a rerun is safe.
+# A version tag builds the binaries, publishes the GitHub Release, proves the
+# Action downloads what was just released, and only then moves the major tag the
+# Action is referenced by and publishes the crate, since those two cannot be
+# undone. Every step that creates something skips it when it already exists, so
+# a rerun is safe.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -89,12 +90,11 @@ jobs:
             git-koi-*.sha256
           if-no-files-found: error
 
-  publish:
+  release:
     needs: [verify, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
     env:
       VERSION: ${{ needs.verify.outputs.version }}
     steps:
@@ -119,6 +119,35 @@ jobs:
               --notes-file release-notes.md
           fi
           gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+
+  smoke:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./
+        with:
+          output-dir: koi-output
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: koi
+          path: koi-output/
+          if-no-files-found: error
+
+  publish:
+    needs: [verify, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Move the major tag to this release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -150,19 +179,3 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates_io_auth.outputs.token }}
         run: cargo +stable publish --locked
-
-  smoke:
-    needs: publish
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./
-        with:
-          output-dir: koi-output
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: koi
-          path: koi-output/
-          if-no-files-found: error

@@ -74,12 +74,12 @@ A release is a version tag, and the release workflow does the rest.
 
 The workflow checks the tag against the manifest and the changelog, builds the
 binaries for Linux, macOS, and Windows, publishes the GitHub Release with the
-changelog section as its notes, moves the major tag such as `v1` so the Action
-follows the release, publishes the crate through crates.io trusted publishing,
-and finally runs the Action against the new release. Every step skips what
-already exists, so rerunning a failed release is safe. The Action downloads the
-release whose version its own `Cargo.toml` names, so a release tag is the only
-thing it can be referenced at.
+changelog section as its notes, and runs the Action against that release. Only
+once that passes does it move the major tag such as `v1`, so the Action follows
+the release, and publish the crate through crates.io trusted publishing, the two
+steps that cannot be undone. Every step skips what already exists, so rerunning
+a failed release is safe. The Action downloads the release whose version its own
+`Cargo.toml` names, so a release tag is the only thing it can be referenced at.
 
 ## Issues and Security
 
