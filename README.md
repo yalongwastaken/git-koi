@@ -9,12 +9,14 @@ GitHub contribution history and repository language shares.
 
 ```text
 .
+├── .github/
 ├── .gitignore
 ├── .prettierrc.json
 ├── Cargo.lock
 ├── Cargo.toml
 ├── LICENSE
 ├── README.md
+├── action.yml
 ├── examples/
 ├── src/
 └── tests/
@@ -96,6 +98,54 @@ keeps the previous files. Success prints one line naming the behavior,
 observation date, and body. Errors go to standard error and exit 1; invalid
 usage exits 2. Exercise the command with
 `cargo test --offline --locked --test render_command`.
+
+### Profile Setup
+
+GitHub shows the README of the repository named after your username, such as
+`octocat/octocat`, on your profile. To give it a koi that updates every night:
+
+1. Copy [examples/profile-workflow.yml](examples/profile-workflow.yml) into that
+   repository as `.github/workflows/koi.yml`.
+2. Embed the koi in its `README.md`:
+
+   ```html
+   <img src="koi/koi.gif" width="256" alt="My koi" />
+   ```
+
+   The GIF is drawn at exactly twice the koi's pixel size, so `width="256"`
+   shows the koi at its native size without blurring it.
+
+3. Run the workflow once from the repository's Actions tab, so the first koi
+   appears without waiting for midnight.
+
+The workflow runs just after midnight UTC, so each koi shows the day that just
+ended, and again whenever the workflow file changes. Its `git-koi` step is this
+repository's Action: it builds `git-koi` from source on the runner, collects
+your public activity with the workflow's built-in token, and renders into
+`koi/`. The Action never commits. The workflow's last step commits `koi/koi.gif`
+only when it changed, so an unchanged koi adds no commit.
+
+| Input        | Default              | Meaning                                                   |
+| ------------ | -------------------- | --------------------------------------------------------- |
+| `login`      | The repository owner | Account whose koi to draw                                 |
+| `body`       | `white`              | `white`, `black`, `asagi`, `tea`, `gold`, or `platinum`   |
+| `output-dir` | `koi`                | Folder that receives `koi.gif`, `koi.png`, `preview.html` |
+| `token`      | The built-in token   | Token for reading the account's public data               |
+
+To change the body, edit `body` in your copy of the workflow; pushing the change
+runs the workflow and redraws the koi. If you change `output-dir`, change the
+commit step's path and the README image to match. The example uses
+`yalongwastaken/git-koi@v1`, which moves to each compatible release; pin a full
+release tag or a commit to choose when you update.
+
+GitHub pauses scheduled workflows in a public repository after 60 days without
+activity such as a push. A koi that stops changing during a long quiet stretch
+adds no commits, so its schedule can pause and does not resume on its own.
+Re-enable it from the Actions tab or with `gh workflow enable koi.yml`.
+
+In this repository, the Action check workflow runs the Action from each pull
+request against the repository owner and attaches what it generates as the `koi`
+artifact, without committing anything.
 
 ### Account Snapshots
 
@@ -329,7 +379,7 @@ cargo fmt --all -- --check
 cargo clippy --offline --locked --all-targets -- -D warnings
 cargo test --offline --locked
 cargo build --release --offline --locked
-npx prettier@3.9.10 --check README.md .prettierrc.json 'tests/fixtures/*.json' .github/workflows/library.yml
+npx prettier@3.9.10 --check README.md .prettierrc.json 'tests/fixtures/*.json' '.github/workflows/*.yml' action.yml examples/profile-workflow.yml
 ```
 
 `--locked` prevents changes to `Cargo.lock`; `--offline` prevents Cargo from
