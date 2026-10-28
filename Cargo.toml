@@ -1,6 +1,6 @@
 [package]
 name = "git-koi"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Draw a pixel-art koi from a GitHub account's public activity, as a looping GIF for a profile README."
