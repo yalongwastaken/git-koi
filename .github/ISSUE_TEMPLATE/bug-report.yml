@@ -1,0 +1,33 @@
+name: Bug report
+description:
+  A command, the Action, or the library gives the wrong result or fails.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description:
+        The command or workflow you ran and what it produced, including any
+        error text.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release you used, or the commit if you built from source.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description:
+        Operating system, or the runner label if it happened in a workflow.

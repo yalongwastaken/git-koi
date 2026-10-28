@@ -372,20 +372,6 @@ For each pull request and push to `main`, the library workflow generates a fresh
 library and attaches it to the run as the `koi-library` artifact. Download it
 from the run's summary page to review rendering changes.
 
-### Manual Checks
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --offline --locked --all-targets -- -D warnings
-cargo test --offline --locked
-cargo build --release --offline --locked
-npx prettier@3.9.10 --check README.md .prettierrc.json 'tests/fixtures/*.json' '.github/workflows/*.yml' action.yml examples/profile-workflow.yml
-```
-
-`--locked` prevents changes to `Cargo.lock`; `--offline` prevents Cargo from
-accessing the network. Fetch dependencies before running the offline checks. The
-Prettier command may download the formatter if it is not cached.
-
 ## Author
 
 **Anthony Yalong**

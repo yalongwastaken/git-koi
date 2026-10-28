@@ -1,0 +1,19 @@
+name: Feature request
+description: Something the koi, the command, or the Action should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposal
+      description:
+        What you would like to happen, and any alternatives you considered.
+    validations:
+      required: true
