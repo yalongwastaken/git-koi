@@ -71,7 +71,8 @@ const CALENDAR_QUERY: &str = "query($login: String!, $from: DateTime!, $to: Date
 /// latest date GitHub reports.
 ///
 /// GitHub limits each calendar request to a year, so the calendar is requested a year at
-/// a time. `today` is the current UTC date and its day is still in progress, so the
+/// a time, and any days GitHub leaves out of an answer are requested again.
+/// `today` is the current UTC date and its day is still in progress, so the
 /// requests end the day before and a run just after midnight observes the day that just
 /// ended. Within that bound the observation date comes from GitHub. An account created
 /// today has no complete day yet and gets an empty history observed through yesterday.
@@ -210,8 +211,8 @@ fn read_repository(
     })
 }
 
-/// Request the calendar a year at a time through the last complete day, keeping only days
-/// inside each requested window and on or after the account's creation date.
+/// Collect the calendar in year-long windows from the account's creation date through the
+/// last complete day.
 fn collect_contribution_history(
     github: &impl GraphqlClient,
     login: &str,
@@ -235,47 +236,12 @@ fn collect_contribution_history(
             .and_then(|next_year| next_year.pred_opt())
             .expect("calendar windows stay within supported dates")
             .min(last_complete_day);
-        let from = format!("{window_start}T00:00:00Z");
-        let to = format!("{window_end}T23:59:59Z");
-        let calendar_data = github.run_query(
-            CALENDAR_QUERY,
-            &[("login", login), ("from", &from), ("to", &to)],
-        )?;
-        let calendar = read_field(
-            read_field(
-                read_field(&calendar_data, "user")?,
-                "contributionsCollection",
-            )?,
-            "contributionCalendar",
-        )?;
-        for calendar_week in read_array(calendar, "weeks")? {
-            for calendar_day in read_array(calendar_week, "contributionDays")? {
-                let contribution_date =
-                    NaiveDate::parse_from_str(read_str(calendar_day, "date")?, "%Y-%m-%d")
-                        .map_err(|parse_error| {
-                            CollectionError::UnexpectedResponse(format!(
-                                "calendar date is invalid: {parse_error}"
-                            ))
-                        })?;
-                if contribution_date < window_start || contribution_date > window_end {
-                    continue;
-                }
-                let contribution_count =
-                    u32::try_from(read_u64(calendar_day, "contributionCount")?).map_err(|_| {
-                        CollectionError::UnexpectedResponse(format!(
-                            "contribution count for {contribution_date} is out of range"
-                        ))
-                    })?;
-                if let Some(previous_count) =
-                    daily_counts.insert(contribution_date, contribution_count)
-                    && previous_count != contribution_count
-                {
-                    return Err(CollectionError::InvalidHistory(
-                        ContributionHistoryError::ConflictingDate(contribution_date),
-                    ));
-                }
-            }
-        }
+        daily_counts.extend(collect_calendar_window(
+            github,
+            login,
+            window_start,
+            window_end,
+        )?);
         window_start = window_end
             .checked_add_days(Days::new(1))
             .expect("calendar windows stay within supported dates");
@@ -300,6 +266,88 @@ fn collect_contribution_history(
             })
             .collect(),
     })
+}
+
+/// Collect one window of the calendar. GitHub can answer a request with fewer days than it
+/// covers, leaving out the earliest, so while the window's first day is missing the days
+/// before the earliest one reported are requested again. Each request ends before the
+/// previous one, so this stops. A request that returns no days stops it with the window
+/// incomplete, and the checks on the whole history report the missing days.
+fn collect_calendar_window(
+    github: &impl GraphqlClient,
+    login: &str,
+    window_start: NaiveDate,
+    window_end: NaiveDate,
+) -> Result<BTreeMap<NaiveDate, u32>, CollectionError> {
+    let mut window_daily_counts = BTreeMap::new();
+    let mut request_end = window_end;
+    loop {
+        let request_daily_counts = request_calendar_days(github, login, window_start, request_end)?;
+        let Some(&earliest_reported_on) = request_daily_counts.keys().next() else {
+            return Ok(window_daily_counts);
+        };
+        window_daily_counts.extend(request_daily_counts);
+        if earliest_reported_on == window_start {
+            return Ok(window_daily_counts);
+        }
+        request_end = earliest_reported_on
+            .pred_opt()
+            .expect("calendar windows stay within supported dates");
+    }
+}
+
+/// Make one calendar request and return the daily counts GitHub reported from
+/// `request_start` through `request_end`. GitHub answers in whole weeks, so days outside
+/// that range are dropped. A date reported twice with different counts fails.
+fn request_calendar_days(
+    github: &impl GraphqlClient,
+    login: &str,
+    request_start: NaiveDate,
+    request_end: NaiveDate,
+) -> Result<BTreeMap<NaiveDate, u32>, CollectionError> {
+    let from = format!("{request_start}T00:00:00Z");
+    let to = format!("{request_end}T23:59:59Z");
+    let calendar_data = github.run_query(
+        CALENDAR_QUERY,
+        &[("login", login), ("from", &from), ("to", &to)],
+    )?;
+    let calendar = read_field(
+        read_field(
+            read_field(&calendar_data, "user")?,
+            "contributionsCollection",
+        )?,
+        "contributionCalendar",
+    )?;
+    let mut daily_counts = BTreeMap::new();
+    for calendar_week in read_array(calendar, "weeks")? {
+        for calendar_day in read_array(calendar_week, "contributionDays")? {
+            let contribution_date =
+                NaiveDate::parse_from_str(read_str(calendar_day, "date")?, "%Y-%m-%d").map_err(
+                    |parse_error| {
+                        CollectionError::UnexpectedResponse(format!(
+                            "calendar date is invalid: {parse_error}"
+                        ))
+                    },
+                )?;
+            if contribution_date < request_start || contribution_date > request_end {
+                continue;
+            }
+            let contribution_count = u32::try_from(read_u64(calendar_day, "contributionCount")?)
+                .map_err(|_| {
+                    CollectionError::UnexpectedResponse(format!(
+                        "contribution count for {contribution_date} is out of range"
+                    ))
+                })?;
+            if let Some(previous_count) = daily_counts.insert(contribution_date, contribution_count)
+                && previous_count != contribution_count
+            {
+                return Err(CollectionError::InvalidHistory(
+                    ContributionHistoryError::ConflictingDate(contribution_date),
+                ));
+            }
+        }
+    }
+    Ok(daily_counts)
 }
 
 fn read_field<'a>(object: &'a Value, field_name: &str) -> Result<&'a Value, CollectionError> {

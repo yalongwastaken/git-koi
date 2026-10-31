@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `git-koi collect` requests again any contribution days GitHub leaves out of an
+  answer, instead of failing with "missing contribution date". GitHub left out
+  days for some accounts whose history crosses a February 29 (#52).
+
 ## [1.0.1] - 2026-10-28
 
 ### Changed
