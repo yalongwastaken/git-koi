@@ -85,6 +85,27 @@ fn calendar_is_requested_one_year_at_a_time_from_account_creation() {
 }
 
 #[test]
+fn a_calendar_github_cuts_short_is_requested_again_until_complete() {
+    /// Days the cutting GitHub keeps from the end of each request, deliberately unlike
+    /// GitHub's own limit and short enough that every year-long window gets cut.
+    const DAYS_KEPT_PER_CUT_REQUEST: u64 = 100;
+    let github_cutting_each_calendar = RecordedGitHub {
+        calendar: |from, to| {
+            let first_day_kept = from.max(to - Days::new(DAYS_KEPT_PER_CUT_REQUEST - 1));
+            Ok(calendar_response(first_day_kept, to, |_| true))
+        },
+        ..RecordedGitHub::new()
+    };
+    let complete_snapshot =
+        collect_account_snapshot(&RecordedGitHub::new(), LOGIN, date("2026-01-03")).unwrap();
+
+    assert_eq!(
+        collect_account_snapshot(&github_cutting_each_calendar, LOGIN, date("2026-01-03")),
+        Ok(complete_snapshot)
+    );
+}
+
+#[test]
 fn the_day_in_progress_is_left_out_even_when_github_reports_it() {
     let github = RecordedGitHub {
         calendar: |from, _| Ok(calendar_response(from, date("2026-01-03"), |_| true)),
