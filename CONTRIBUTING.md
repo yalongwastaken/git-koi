@@ -60,6 +60,7 @@ cargo run --locked --example generate-library -- library
 
 When a change alters how the koi looks, copy `library/bodies-light.png` and
 `library/bodies-dark.png` into `docs/` so the README's sheet matches the code.
+The koi library workflow fails until they match.
 
 ## Releasing
 
