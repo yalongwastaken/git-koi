@@ -22,3 +22,9 @@ token the caller supplies, and writes only the files the caller names. The
 Action runs inside the calling workflow with that workflow's permissions. A
 report that shows it reading, writing, or sending anything beyond that is in
 scope.
+
+Whatever token a workflow passes the Action, the Action's process holds it, so
+the token bounds what a compromised release could do. The default, the
+workflow's built-in token, reaches only the calling repository, for one job,
+with the workflow's permissions. A personal access token would hand over
+everything it can reach, so keep the default.

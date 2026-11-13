@@ -35,13 +35,29 @@ when it changed, so an unchanged koi adds no commit.
 | `login`      | The repository owner | Account whose koi to draw                                 |
 | `body`       | `white`              | `white`, `black`, `asagi`, `tea`, `gold`, or `platinum`   |
 | `output-dir` | `koi`                | Folder that receives `koi.gif`, `koi.png`, `preview.html` |
-| `token`      | The built-in token   | Token for reading the account's public data               |
+| `token`      | The built-in token   | Token for reading public data; keep the default           |
 
 To change the body, edit `body` in your copy of the workflow; pushing the change
 runs the workflow and redraws the koi. If you change `output-dir`, change the
-commit step's path and the README image to match. The example uses
-`yalongwastaken/git-koi@v1`, which moves to each compatible release; pin a full
-release tag to choose when you update.
+commit step's path and the README image to match.
+
+Keep `token` at its default. The Action's process holds whatever token the
+workflow passes it, so the token bounds what a compromised release could do. The
+built-in token reaches only the profile repository, for one job, with the
+workflow's `contents: write`; a personal access token would hand over everything
+it can reach.
+
+The example uses `yalongwastaken/git-koi@v1`. Each way of referencing the Action
+fixes something different:
+
+- `@v1` runs whichever release `v1` points to, and it moves to each compatible
+  release.
+- A full release tag such as `@v1.0.2` chooses when you update, but anyone who
+  can push to this repository can move a tag, so it does not fix what runs.
+- A full commit hash fixes `action.yml` and the version it downloads. The binary
+  still comes from that version's GitHub Release, and the checksum the Action
+  checks it against comes from the same release, so a binary replaced together
+  with its checksum would still pass.
 
 GitHub pauses scheduled workflows in a public repository after 60 days without
 activity such as a push. A koi that stops changing during a long quiet stretch

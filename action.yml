@@ -20,7 +20,9 @@ inputs:
     default: koi
   token:
     description:
-      Token for reading the account's public data; the built-in token is enough.
+      Token for reading the account's public data. Keep the built-in token,
+      since the Action's process holds whatever token it is given and the
+      built-in one reaches only this repository, for this job.
     default: ${{ github.token }}
 
 runs:
