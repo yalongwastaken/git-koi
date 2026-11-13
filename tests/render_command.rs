@@ -76,6 +76,41 @@ fn render_writes_the_days_loop_still_and_preview_as_the_renderer_draws_them() {
 }
 
 #[test]
+fn the_caption_names_the_pond() {
+    let output_directory = fresh_directory("render-pond");
+    let command_output = run_git_koi(&[
+        "render",
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/account-with-pond.json"
+        ),
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        command_output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&command_output.stderr)
+    );
+    let summary_line = String::from_utf8_lossy(&command_output.stdout);
+    assert!(
+        summary_line.contains("4 lily pads, 2 rocks"),
+        "{summary_line}"
+    );
+    let preview_html = fs::read_to_string(output_directory.join("preview.html")).unwrap();
+    assert!(preview_html.contains("4 lily pads, 2 rocks"));
+    // The pond-less fixture names no pond.
+    let quiet_output = run_git_koi(&[
+        "render",
+        HISTORY_FIXTURE,
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+    ]);
+    assert!(!String::from_utf8_lossy(&quiet_output.stdout).contains("lily pad"));
+}
+
+#[test]
 fn the_body_option_redraws_the_koi_in_that_body() {
     let output_directory = fresh_directory("render-black");
     let command_output = run_git_koi(&[

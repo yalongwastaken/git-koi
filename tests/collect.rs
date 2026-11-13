@@ -7,7 +7,8 @@ use chrono::{Datelike, Days, NaiveDate, Weekday};
 use git_koi::coat::KoiBody;
 use git_koi::collect::{CollectionError, GraphqlClient, collect_account_snapshot};
 use git_koi::history::{
-    ContributionHistoryError, LanguageColor, calculate_language_shares, summarize_contributions,
+    ContributionHistoryError, DayActivity, LanguageColor, calculate_language_shares,
+    summarize_contributions,
 };
 use git_koi::koi::derive_koi_development;
 use git_koi::render::render_koi;
@@ -57,6 +58,82 @@ fn collected_snapshot_covers_every_page_and_day_and_renders() {
 }
 
 #[test]
+fn the_week_ending_on_the_observation_date_is_requested_one_day_at_a_time() {
+    let github = RecordedGitHub::new();
+    let account_snapshot = collect_account_snapshot(&github, LOGIN, date("2026-01-03")).unwrap();
+
+    let expected_week: Vec<DayActivity> = date("2025-12-27")
+        .iter_days()
+        .take_while(|day| *day <= date("2026-01-02"))
+        .map(|day| DayActivity {
+            date: day,
+            issues_opened: synthetic_issue_count(day),
+            pull_requests_opened: synthetic_pull_request_count(day),
+        })
+        .collect();
+    assert_eq!(account_snapshot.daily_activity, Some(expected_week));
+    let activity_windows: Vec<(String, String)> = github
+        .requests
+        .borrow()
+        .iter()
+        .filter(|variables| variables["query"] == "activity")
+        .map(|variables| (variables["from"].clone(), variables["to"].clone()))
+        .collect();
+    assert_eq!(activity_windows.len(), 7);
+    assert_eq!(
+        activity_windows[0],
+        (
+            "2025-12-27T00:00:00Z".to_owned(),
+            "2025-12-27T23:59:59Z".to_owned()
+        )
+    );
+    assert_eq!(
+        activity_windows[6],
+        (
+            "2026-01-02T00:00:00Z".to_owned(),
+            "2026-01-02T23:59:59Z".to_owned()
+        )
+    );
+}
+
+#[test]
+fn a_young_account_gets_only_the_days_since_its_creation() {
+    let github = RecordedGitHub {
+        account: json!({ "databaseId": 4242, "createdAt": "2026-01-01T08:00:00Z" }),
+        ..RecordedGitHub::new()
+    };
+    let account_snapshot = collect_account_snapshot(&github, LOGIN, date("2026-01-03")).unwrap();
+    let daily_activity = account_snapshot.daily_activity.unwrap();
+    assert_eq!(daily_activity.len(), 2);
+    assert_eq!(daily_activity[0].date, date("2026-01-01"));
+    assert_eq!(daily_activity[1].date, date("2026-01-02"));
+
+    let github_created_today = RecordedGitHub {
+        account: json!({ "databaseId": 4242, "createdAt": "2026-01-03T08:00:00Z" }),
+        ..RecordedGitHub::new()
+    };
+    let young_snapshot =
+        collect_account_snapshot(&github_created_today, LOGIN, date("2026-01-03")).unwrap();
+    assert_eq!(young_snapshot.daily_activity, Some(Vec::new()));
+}
+
+#[test]
+fn missing_activity_fields_fail_instead_of_guessing() {
+    let github = RecordedGitHub {
+        activity: |_| {
+            Ok(json!({ "user": { "contributionsCollection": { "totalIssueContributions": 1 } } }))
+        },
+        ..RecordedGitHub::new()
+    };
+    match collect_account_snapshot(&github, LOGIN, date("2026-01-03")) {
+        Err(CollectionError::UnexpectedResponse(detail)) => {
+            assert!(detail.contains("totalPullRequestContributions"));
+        }
+        other => panic!("expected an unexpected-response error, got {other:?}"),
+    }
+}
+
+#[test]
 fn calendar_is_requested_one_year_at_a_time_from_account_creation() {
     let github = RecordedGitHub::new();
     collect_account_snapshot(&github, LOGIN, date("2026-01-03")).unwrap();
@@ -65,9 +142,8 @@ fn calendar_is_requested_one_year_at_a_time_from_account_creation() {
         .requests
         .borrow()
         .iter()
-        .filter_map(|variables| {
-            Some((variables.get("from")?.clone(), variables.get("to")?.clone()))
-        })
+        .filter(|variables| variables["query"] == "calendar")
+        .map(|variables| (variables["from"].clone(), variables["to"].clone()))
         .collect();
     assert_eq!(
         calendar_windows,
@@ -270,12 +346,13 @@ fn collection_failure_exits_one_and_keeps_the_previous_snapshot() {
 }
 
 /// Answers queries the way GitHub does for a small synthetic account and records
-/// the variables of every request.
+/// the variables of every request, with the kind of query under `query`.
 struct RecordedGitHub {
     account: Value,
     owned_pages: Vec<Value>,
     contributed_pages: Vec<Value>,
     calendar: fn(NaiveDate, NaiveDate) -> Result<Value, CollectionError>,
+    activity: fn(NaiveDate) -> Result<Value, CollectionError>,
     requests: RefCell<Vec<BTreeMap<String, String>>>,
 }
 
@@ -295,6 +372,7 @@ impl RecordedGitHub {
             ],
             contributed_pages: vec![repository_page(vec![repository_node(4, false, None)], None)],
             calendar: |from, to| Ok(calendar_response(from, to, |_| true)),
+            activity: |day| Ok(activity_response(day)),
             requests: RefCell::new(Vec::new()),
         }
     }
@@ -306,10 +384,23 @@ impl GraphqlClient for RecordedGitHub {
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
             .collect();
-        self.requests.borrow_mut().push(variables.clone());
-        if query.contains("contributionsCollection") {
-            let window_date = |name: &str| date(&variables[name][..10]);
+        let query_kind = if query.contains("contributionCalendar") {
+            "calendar"
+        } else if query.contains("totalIssueContributions") {
+            "activity"
+        } else {
+            "other"
+        };
+        let mut recorded_variables = variables.clone();
+        recorded_variables.insert("query".to_owned(), query_kind.to_owned());
+        self.requests.borrow_mut().push(recorded_variables);
+        let window_date = |name: &str| date(&variables[name][..10]);
+        if query_kind == "calendar" {
             return (self.calendar)(window_date("from"), window_date("to"));
+        }
+        if query_kind == "activity" {
+            assert_eq!(window_date("from"), window_date("to"));
+            return (self.activity)(window_date("from"));
         }
         let (connection_name, pages) = if query.contains("repositoriesContributedTo") {
             ("repositoriesContributedTo", &self.contributed_pages)
@@ -370,6 +461,22 @@ fn calendar_response(from: NaiveDate, to: NaiveDate, keep_day: fn(NaiveDate) -> 
 
 fn synthetic_count(day: NaiveDate) -> u32 {
     day.ordinal() % 4
+}
+
+/// One day's issue and pull request totals the way GitHub returns them.
+fn activity_response(day: NaiveDate) -> Value {
+    json!({ "user": { "contributionsCollection": {
+        "totalIssueContributions": synthetic_issue_count(day),
+        "totalPullRequestContributions": synthetic_pull_request_count(day),
+    } } })
+}
+
+fn synthetic_issue_count(day: NaiveDate) -> u32 {
+    day.ordinal() % 3
+}
+
+fn synthetic_pull_request_count(day: NaiveDate) -> u32 {
+    day.ordinal() % 2
 }
 
 fn date(text: &str) -> NaiveDate {

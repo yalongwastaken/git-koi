@@ -12,9 +12,10 @@ use serde_json::Value;
 
 use crate::history::{
     AccountSnapshot, ConflictingRepository, ContributionDay, ContributionHistory,
-    ContributionHistoryError, LanguageColor, RepositoryObservation, RepositoryVisibility,
-    calculate_language_shares, summarize_contributions,
+    ContributionHistoryError, DayActivity, LanguageColor, RepositoryObservation,
+    RepositoryVisibility, calculate_language_shares, summarize_contributions,
 };
+use crate::koi::POND_DAY_COUNT;
 
 /// Runs one GitHub GraphQL query with string variables and returns its `data` object.
 pub trait GraphqlClient {
@@ -64,11 +65,15 @@ const REPOSITORY_FIELDS: &str = "nodes { databaseId visibility isFork primaryLan
 const CALENDAR_QUERY: &str = "query($login: String!, $from: DateTime!, $to: DateTime!) { \
     user(login: $login) { contributionsCollection(from: $from, to: $to) { \
     contributionCalendar { weeks { contributionDays { date contributionCount } } } } } }";
+const ACTIVITY_QUERY: &str = "query($login: String!, $from: DateTime!, $to: DateTime!) { \
+    user(login: $login) { contributionsCollection(from: $from, to: $to) { \
+    totalIssueContributions totalPullRequestContributions } } }";
 
 /// Collect one account's public snapshot: its public owned repositories, the public
 /// repositories GitHub counts it as contributing to, GitHub's color for each of their
-/// languages, and daily contribution counts from the day it was created through the
-/// latest date GitHub reports.
+/// languages, daily contribution counts from the day it was created through the
+/// latest date GitHub reports, and the issues and pull requests it opened on each of
+/// the last [`POND_DAY_COUNT`] of those days.
 ///
 /// GitHub limits each calendar request to a year, so the calendar is requested a year at
 /// a time, and any days GitHub leaves out of an answer are requested again.
@@ -76,9 +81,11 @@ const CALENDAR_QUERY: &str = "query($login: String!, $from: DateTime!, $to: Date
 /// requests end the day before and a run just after midnight observes the day that just
 /// ended. Within that bound the observation date comes from GitHub. An account created
 /// today has no complete day yet and gets an empty history observed through yesterday.
-/// The snapshot is checked against the history rules before it is returned, so a gap,
-/// a conflict, or a calendar that starts after the account was created fails instead of
-/// producing a partial snapshot.
+/// The issue and pull request totals are requested one day at a time, from the later
+/// of the account's creation and the start of the pond's week through the observation
+/// date. The snapshot is checked against the history rules before it is returned, so a
+/// gap, a conflict, or a calendar that starts after the account was created fails
+/// instead of producing a partial snapshot.
 pub fn collect_account_snapshot(
     github: &impl GraphqlClient,
     login: &str,
@@ -114,13 +121,15 @@ pub fn collect_account_snapshot(
          includeUserRepositories: false, \
          contributionTypes: [COMMIT, ISSUE, PULL_REQUEST, PULL_REQUEST_REVIEW, REPOSITORY])",
     )?);
+    let contribution_history = collect_contribution_history(github, login, created_on, today)?;
+    let daily_activity =
+        collect_daily_activity(github, login, created_on, contribution_history.observed_on)?;
     let account_snapshot = AccountSnapshot {
         account_id,
         repositories,
-        contribution_history: Some(collect_contribution_history(
-            github, login, created_on, today,
-        )?),
+        contribution_history: Some(contribution_history),
         language_colors: Some(language_colors),
+        daily_activity: Some(daily_activity),
     };
     summarize_contributions(&account_snapshot).map_err(CollectionError::InvalidHistory)?;
     calculate_language_shares(&account_snapshot).map_err(CollectionError::ConflictingRepository)?;
@@ -266,6 +275,52 @@ fn collect_contribution_history(
             })
             .collect(),
     })
+}
+
+/// Collect the issues and pull requests opened on each day of the pond's week, one
+/// request per day, from the later of the account's creation and the week's start
+/// through the observation date. An account created after the observation date has no
+/// complete day and gets an empty list.
+fn collect_daily_activity(
+    github: &impl GraphqlClient,
+    login: &str,
+    created_on: NaiveDate,
+    observed_on: NaiveDate,
+) -> Result<Vec<DayActivity>, CollectionError> {
+    let week_start = observed_on
+        .checked_sub_days(Days::new(POND_DAY_COUNT - 1))
+        .expect("calendar windows stay within supported dates")
+        .max(created_on);
+    week_start
+        .iter_days()
+        .take_while(|day| *day <= observed_on)
+        .map(|day| {
+            let activity_data = github.run_query(
+                ACTIVITY_QUERY,
+                &[
+                    ("login", login),
+                    ("from", &format!("{day}T00:00:00Z")),
+                    ("to", &format!("{day}T23:59:59Z")),
+                ],
+            )?;
+            let contributions = read_field(
+                read_field(&activity_data, "user")?,
+                "contributionsCollection",
+            )?;
+            let read_count = |field_name: &str| {
+                u32::try_from(read_u64(contributions, field_name)?).map_err(|_| {
+                    CollectionError::UnexpectedResponse(format!(
+                        "{field_name} for {day} is out of range"
+                    ))
+                })
+            };
+            Ok(DayActivity {
+                date: day,
+                issues_opened: read_count("totalIssueContributions")?,
+                pull_requests_opened: read_count("totalPullRequestContributions")?,
+            })
+        })
+        .collect()
 }
 
 /// Collect one window of the calendar. GitHub can answer a request with fewer days than it

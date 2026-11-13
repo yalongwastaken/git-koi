@@ -13,19 +13,23 @@ use git_koi::history::AccountSnapshot;
 use git_koi::koi::derive_koi_development;
 use git_koi::motion::frame_count;
 use git_koi::output::{encode_gif, encode_png, encode_preview_html};
+use git_koi::pond::{Pond, lay_out_pond};
 use git_koi::render::{KoiFrame, render_koi, render_swim_frame};
 
 const USAGE: &str = "Usage: git-koi collect LOGIN [--output FILE]
        git-koi render SNAPSHOT --output-dir DIR [--body BODY]
        git-koi --help | --version
 Collect LOGIN's public GitHub snapshot as JSON through `gh api`: public owned and
-contributed repositories, and daily contributions from the account's creation
-through yesterday (UTC), the last complete day.
+contributed repositories, daily contributions from the account's creation through
+yesterday (UTC), the last complete day, and the issues and pull requests opened on
+each of the last seven days.
 Writes to standard output, or replaces FILE only after collection succeeds.
 Requires an authenticated GitHub CLI; in GitHub Actions, set GH_TOKEN to github.token.
 Render a collected SNAPSHOT into DIR: koi.gif swims the behavior chosen for its
 observation date, koi.png is the still koi, and preview.html shows both on light and
-dark backgrounds. BODY is white (the default), black, asagi, tea, gold, or platinum.
+dark backgrounds. Each of the last seven days with an issue opened floats a lily pad
+and each with a pull request opened settles a rock, sized by the day's count.
+BODY is white (the default), black, asagi, tea, gold, or platinum.
 The files are replaced only after all of them render.
 Errors go to stderr and exit 1; invalid usage exits 2.
 Examples: git-koi collect octocat --output snapshot.json
@@ -131,7 +135,8 @@ fn run_render(snapshot_path: &Path, output_directory: &Path, koi_body: KoiBody) 
     }
 }
 
-/// The day's files, by name, with a caption naming the behavior, observation date, and body.
+/// The day's files, by name, with a caption naming the behavior, observation date, body,
+/// and pond.
 struct RenderedDay {
     caption: String,
     output_files: [(&'static str, Vec<u8>); 3],
@@ -154,10 +159,11 @@ fn render_day(snapshot_path: &Path, koi_body: KoiBody) -> Result<RenderedDay, St
     let png_bytes = encode_png(&render_koi(&koi_development, koi_body))
         .map_err(|encoding_error| encoding_error.to_string())?;
     let caption = format!(
-        "{} for {}, {} body",
+        "{} for {}, {} body{}",
         describe_behavior(behavior),
         koi_development.observed_on,
-        name_body(koi_body)
+        name_body(koi_body),
+        describe_pond(&lay_out_pond(&koi_development))
     );
     let preview_html = encode_preview_html(&caption);
     Ok(RenderedDay {
@@ -183,6 +189,23 @@ fn name_body(koi_body: KoiBody) -> &'static str {
         .find(|(_, named_body)| *named_body == koi_body)
         .map(|(body_name, _)| *body_name)
         .expect("every body has a name")
+}
+
+/// The pond as a caption suffix, such as ", 2 lily pads, 1 rock"; empty for an empty
+/// pond.
+fn describe_pond(pond: &Pond) -> String {
+    let mut description = String::new();
+    for (object_count, object_name) in [
+        (pond.lily_pads.len(), "lily pad"),
+        (pond.rocks.len(), "rock"),
+    ] {
+        match object_count {
+            0 => {}
+            1 => description.push_str(&format!(", 1 {object_name}")),
+            _ => description.push_str(&format!(", {object_count} {object_name}s")),
+        }
+    }
+    description
 }
 
 fn describe_behavior(behavior: Behavior) -> &'static str {

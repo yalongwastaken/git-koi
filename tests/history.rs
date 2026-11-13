@@ -3,12 +3,70 @@ use std::collections::BTreeMap;
 use chrono::{Datelike, Days, NaiveDate};
 use git_koi::history::{
     AccountSnapshot, ConflictingRepository, ContributionDay, ContributionHistory,
-    ContributionHistoryError, LanguageColor, RepositoryVisibility, calculate_language_shares,
-    summarize_contributions,
+    ContributionHistoryError, DayActivity, LanguageColor, RepositoryVisibility,
+    calculate_language_shares, summarize_contributions,
 };
 
 const ACCOUNT_JSON: &str = include_str!("fixtures/account.json");
 const ACCOUNT_WITH_HISTORY_JSON: &str = include_str!("fixtures/account-with-history.json");
+const ACCOUNT_WITH_POND_JSON: &str = include_str!("fixtures/account-with-pond.json");
+
+#[test]
+fn version_four_snapshots_carry_daily_activity_and_round_trip() {
+    let account_snapshot: AccountSnapshot = serde_json::from_str(ACCOUNT_WITH_POND_JSON).unwrap();
+
+    let daily_activity = account_snapshot.daily_activity.as_ref().unwrap();
+    assert_eq!(daily_activity.len(), 7);
+    assert_eq!(
+        daily_activity[6],
+        DayActivity {
+            date: "2026-01-06".parse().unwrap(),
+            issues_opened: 2,
+            pull_requests_opened: 0,
+        }
+    );
+    let written_document = serde_json::to_value(&account_snapshot).unwrap();
+    assert_eq!(written_document["schema_version"], 4);
+    let restored_snapshot: AccountSnapshot = serde_json::from_value(written_document).unwrap();
+    assert_eq!(restored_snapshot, account_snapshot);
+
+    // Older snapshots still read; they just have no week of activity.
+    let history_snapshot: AccountSnapshot =
+        serde_json::from_str(ACCOUNT_WITH_HISTORY_JSON).unwrap();
+    assert_eq!(history_snapshot.daily_activity, None);
+    assert_eq!(
+        serde_json::to_value(&history_snapshot).unwrap()["schema_version"],
+        3
+    );
+}
+
+#[test]
+fn daily_activity_belongs_to_version_four_only() {
+    let pond_document: serde_json::Value = serde_json::from_str(ACCOUNT_WITH_POND_JSON).unwrap();
+    let mut version_four_without_activity = pond_document.clone();
+    version_four_without_activity
+        .as_object_mut()
+        .unwrap()
+        .remove("daily_activity");
+    let mut version_three_with_activity = pond_document.clone();
+    version_three_with_activity["schema_version"] = serde_json::json!(3);
+    let mut day_with_unknown_field = pond_document.clone();
+    day_with_unknown_field["daily_activity"][0]["unexpected_field"] = serde_json::json!(1);
+    let mut day_without_pull_requests = pond_document;
+    day_without_pull_requests["daily_activity"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("pull_requests_opened");
+
+    for incompatible_document in [
+        version_four_without_activity,
+        version_three_with_activity,
+        day_with_unknown_field,
+        day_without_pull_requests,
+    ] {
+        assert!(serde_json::from_value::<AccountSnapshot>(incompatible_document).is_err());
+    }
+}
 
 #[test]
 fn language_shares_count_only_eligible_projects() {

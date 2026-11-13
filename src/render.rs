@@ -1,5 +1,5 @@
 //! A curved koi colored from its languages on a chosen body, with Classic shading and
-//! transparent surroundings.
+//! transparent surroundings, in a pond of lily pads and rocks.
 //!
 //! The body and fins follow sampled curves, with shading that follows the body surface
 //! and fin rays that follow each fin's direction. The head widens from a round nose
@@ -12,10 +12,18 @@
 //! maximum form keeps its anatomy at higher totals. Quiet days alone do not change the
 //! base anatomy. The pose and framing account for the body and fins.
 //!
+//! The pond from [`crate::pond`] is drawn in frame space, so neither framing nor depth
+//! moves it: rocks lie on the bottom under the koi, on an inner ring the koi laps over,
+//! and lily pads float on the surface over it, in the corners and at the edges, where
+//! the koi passes under a pad's edge only on its widest laps. While the koi swims, its
+//! wake trails the tail and water marks shimmer across the surface, over the rocks and
+//! under the pads; the still shows neither.
+//!
 //! Every growth level shares one square native canvas of [`FRAME_WIDTH_PIXELS`] by
 //! [`FRAME_HEIGHT_PIXELS`], which the encoders in [`crate::output`] scale up exactly.
 //! Anatomical proportions live here; pigments, bodies, and palettes in [`crate::coat`];
-//! streak mark strengths in [`crate::markings`]; poses in [`crate::motion`].
+//! streak mark strengths in [`crate::markings`]; poses in [`crate::motion`]; which pond
+//! objects there are, and how large, in [`crate::pond`].
 
 use std::f64::consts::{PI, TAU};
 
@@ -25,6 +33,7 @@ use crate::koi::{
     ADULT_CONTRIBUTIONS, KoiDevelopment, YOUNG_SHAPE_CONTRIBUTIONS, calculate_growth_fraction,
 };
 use crate::motion::{Course, STILL_POSE, SwimPose, calculate_swim_pose, frame_count};
+use crate::pond::{PondObject, PondObjectKind, PondObjectSize, SLOT_COUNT, lay_out_pond};
 
 /// Width of the native canvas every koi is drawn on, at every growth level.
 pub const FRAME_WIDTH_PIXELS: u32 = 256;
@@ -55,8 +64,9 @@ impl KoiFrame {
 /// the caller's chosen body. Contribution totals set its size and how far its colors
 /// have come in. The account seed places patches in body coordinates, so growth does
 /// not reroll the pattern. Streak marks follow the development's streaks as of its
-/// observation date. Identical inputs produce identical pixels without I/O, clock
-/// reads, or input mutation.
+/// observation date. The week's pond surrounds it, rocks under the koi and lily pads
+/// over it. Identical inputs produce identical pixels without I/O, clock reads, or
+/// input mutation.
 pub fn render_koi(koi_development: &KoiDevelopment, koi_body: KoiBody) -> KoiFrame {
     let koi_anatomy = calculate_anatomy(koi_development.total_contributions);
     render_pose(
@@ -65,6 +75,7 @@ pub fn render_koi(koi_development: &KoiDevelopment, koi_body: KoiBody) -> KoiFra
         &koi_anatomy,
         &STILL_POSE,
         Framing::CenterOnKoi,
+        None,
     )
 }
 
@@ -74,8 +85,12 @@ pub fn render_koi(koi_development: &KoiDevelopment, koi_body: KoiBody) -> KoiFra
 /// koi swim a tighter lap so every size fits. A hovering loop is framed once, centered
 /// on the koi's sweep, and its drift shrinks only as far as the largest koi need to
 /// stay inside. The view never follows the fins, so it never shakes. Under water the koi
-/// turns toward water blue and partly drops out, more with depth. Identical inputs
-/// produce identical pixels without I/O, clock reads, or input mutation.
+/// turns toward water blue and partly drops out, more with depth; the pond stays as it
+/// is, fixed in the frame across the loop. The koi's wake trails its tail, as much as
+/// the day's contributions earn, and water marks seeded by the account shimmer across
+/// the water once per loop, as many as the week's contributions earn; the still has
+/// neither. Identical inputs produce identical pixels without I/O, clock reads, or
+/// input mutation.
 pub fn render_swim_frame(
     koi_development: &KoiDevelopment,
     koi_body: KoiBody,
@@ -100,6 +115,7 @@ pub fn render_swim_frame(
         &koi_anatomy,
         &swim_pose,
         Framing::At(pose_center),
+        Some(f64::from(frame_index % frame_count(behavior)) / f64::from(frame_count(behavior))),
     )
 }
 
@@ -188,6 +204,7 @@ fn render_pose(
     koi_anatomy: &KoiAnatomy,
     swim_pose: &SwimPose,
     framing: Framing,
+    water_phase: Option<f64>,
 ) -> KoiFrame {
     let koi_coat = KoiCoat::new(koi_development, koi_body, |along_fraction| {
         calculate_body_half_width(along_fraction, koi_anatomy)
@@ -258,7 +275,206 @@ fn render_pose(
     if swim_pose.depth > 0.0 {
         paint_depth(&mut rgba_pixels, &fish_pixel_mask, swim_pose.depth);
     }
+    let pond = lay_out_pond(koi_development);
+    paint_wake(
+        &mut rgba_pixels,
+        &body_spine,
+        &fin_curves,
+        pose_center,
+        swim_pose.wake_strength * pond.water.wake_scale,
+        swim_pose.wave_phase_radians,
+    );
+    if let Some(water_phase) = water_phase {
+        paint_water_marks(
+            &mut rgba_pixels,
+            koi_development.identity_seed,
+            water_phase,
+            pond.water.mark_count,
+        );
+    }
+    let rock_layer = paint_pond_layer(&pond.rocks);
+    for (pixel_channels, &rock_channels) in rgba_pixels.iter_mut().zip(&rock_layer) {
+        if pixel_channels[3] == 0 {
+            *pixel_channels = rock_channels;
+        }
+    }
+    let lily_pad_layer = paint_pond_layer(&pond.lily_pads);
+    for (pixel_channels, &lily_pad_channels) in rgba_pixels.iter_mut().zip(&lily_pad_layer) {
+        if lily_pad_channels[3] != 0 {
+            *pixel_channels = lily_pad_channels;
+        }
+    }
     KoiFrame { rgba_pixels }
+}
+
+/// Lily pad slots from the frame center, newest first: the four corners, then the four
+/// edge midpoints, clockwise from the top right. The corners lie beyond the koi's widest
+/// lap; the koi passes under the edge of an edge-slot pad on its widest laps.
+const LILY_PAD_SLOTS: [[f64; 2]; SLOT_COUNT] = [
+    [104.0, -104.0],
+    [104.0, 104.0],
+    [-104.0, 104.0],
+    [-104.0, -104.0],
+    [0.0, -112.0],
+    [112.0, 0.0],
+    [0.0, 112.0],
+    [-112.0, 0.0],
+];
+/// Slots at the corners, where a large lily pad still clears the koi.
+const CORNER_SLOT_COUNT: usize = 4;
+/// Each variant moves its object a few pixels off its slot, so the pond looks
+/// scattered rather than set out on rings.
+const VARIANT_NUDGES_PIXELS: [[f64; 2]; 4] = [[0.0, 0.0], [5.0, -3.0], [-4.0, 4.0], [3.0, 5.0]];
+const LILY_PAD_HEIGHT_PER_WIDTH: f64 = 0.8;
+/// The notch is a wedge cut from the rim toward the center, turned by the variant.
+const LILY_PAD_NOTCH_HALF_ANGLE_RADIANS: f64 = 0.38;
+const LILY_PAD_NOTCH_INNER_FRACTION: f64 = 0.25;
+/// The vein runs from the center away from the notch.
+const LILY_PAD_VEIN_HALF_WIDTH_FRACTION: f64 = 0.08;
+const LILY_PAD_RAMP: [[u8; 4]; 3] = [[38, 92, 66, 255], [62, 137, 72, 255], [99, 199, 77, 255]];
+/// Rock slots on an inner ring between the lily pad slots, inside the koi's widest lap,
+/// so the koi swims over them. Angles are clockwise on screen from the right.
+const ROCK_RING_RADIUS_PIXELS: f64 = 105.0;
+const ROCK_SLOT_ANGLES_DEGREES: [f64; SLOT_COUNT] =
+    [-67.5, 22.5, 112.5, 202.5, -22.5, 67.5, 157.5, 247.5];
+const ROCK_HEIGHT_PER_WIDTH: f64 = 0.65;
+/// Each variant squashes the rock a little flatter and wider, so no two rocks match.
+const ROCK_VARIANT_SQUASH: f64 = 0.08;
+/// The underside sits flatter than the top, as a rock settles.
+const ROCK_UNDERSIDE_HEIGHT_FRACTION: f64 = 0.7;
+const ROCK_RAMP: [[u8; 4]; 3] = [
+    [58, 68, 102, 255],
+    [90, 105, 136, 255],
+    [139, 155, 180, 255],
+];
+
+fn lily_pad_half_width(size: PondObjectSize) -> f64 {
+    match size {
+        PondObjectSize::Small => 5.0,
+        PondObjectSize::Medium => 8.0,
+        PondObjectSize::Large => 11.0,
+    }
+}
+
+fn rock_half_width(size: PondObjectSize) -> f64 {
+    match size {
+        PondObjectSize::Small => 4.0,
+        PondObjectSize::Medium => 6.0,
+        PondObjectSize::Large => 8.0,
+    }
+}
+
+/// Paint the given pond objects on an empty layer and outline them, so they can be
+/// laid under or over the koi without changing it.
+fn paint_pond_layer(pond_objects: &[PondObject]) -> Vec<[u8; 4]> {
+    let mut layer_pixels = vec![[0; 4]; (FRAME_WIDTH_PIXELS * FRAME_HEIGHT_PIXELS) as usize];
+    for pond_object in pond_objects {
+        match pond_object.kind {
+            PondObjectKind::LilyPad => paint_lily_pad(&mut layer_pixels, pond_object),
+            PondObjectKind::Rock => paint_rock(&mut layer_pixels, pond_object),
+        }
+    }
+    paint_outline(&mut layer_pixels);
+    layer_pixels
+}
+
+/// A lily pad: an ellipse lit from the upper left, with a wedge notch toward the
+/// variant's angle and a dark vein running away from it. A large pad on an edge slot
+/// is drawn medium, since only a corner has room for it.
+fn paint_lily_pad(layer_pixels: &mut [[u8; 4]], lily_pad: &PondObject) {
+    let size = if lily_pad.slot >= CORNER_SLOT_COUNT {
+        lily_pad.size.min(PondObjectSize::Medium)
+    } else {
+        lily_pad.size
+    };
+    let half_width = lily_pad_half_width(size);
+    let [slot_x, slot_y] = LILY_PAD_SLOTS[lily_pad.slot % SLOT_COUNT];
+    let [nudge_x, nudge_y] = VARIANT_NUDGES_PIXELS[usize::from(lily_pad.variant) % 4];
+    let notch_angle_radians = f64::from(lily_pad.variant) * PI / 2.0 + PI / 4.0;
+    let notch_direction = [notch_angle_radians.cos(), notch_angle_radians.sin()];
+    paint_ellipse(
+        layer_pixels,
+        [slot_x + nudge_x, slot_y + nudge_y],
+        [half_width, half_width * LILY_PAD_HEIGHT_PER_WIDTH],
+        |[offset_x, offset_y], pixel_position| {
+            let radius_fraction = offset_x.hypot(offset_y);
+            let angle_from_notch =
+                (offset_y.atan2(offset_x) - notch_angle_radians + PI).rem_euclid(TAU) - PI;
+            if radius_fraction > LILY_PAD_NOTCH_INNER_FRACTION
+                && angle_from_notch.abs() < LILY_PAD_NOTCH_HALF_ANGLE_RADIANS
+            {
+                return None;
+            }
+            let along_vein = -(offset_x * notch_direction[0] + offset_y * notch_direction[1]);
+            let across_vein = (offset_x * notch_direction[1] - offset_y * notch_direction[0]).abs();
+            if along_vein > 0.1 && across_vein < LILY_PAD_VEIN_HALF_WIDTH_FRACTION {
+                return Some(LILY_PAD_RAMP[0]);
+            }
+            let brightness = 0.55 + 0.45 * (-0.45 * offset_x - 0.6 * offset_y);
+            Some(choose_shade(&LILY_PAD_RAMP, brightness, pixel_position))
+        },
+    );
+}
+
+/// A rock: a flattened ellipse lit from above, squashed a little more by each
+/// variant, with a flatter underside.
+fn paint_rock(layer_pixels: &mut [[u8; 4]], rock: &PondObject) {
+    let squash = ROCK_VARIANT_SQUASH * f64::from(rock.variant);
+    let half_width = rock_half_width(rock.size) * (1.0 + squash);
+    let half_height = rock_half_width(rock.size) * ROCK_HEIGHT_PER_WIDTH * (1.0 - squash);
+    let slot_angle_radians = ROCK_SLOT_ANGLES_DEGREES[rock.slot % SLOT_COUNT].to_radians();
+    let [nudge_x, nudge_y] = VARIANT_NUDGES_PIXELS[usize::from(rock.variant) % 4];
+    let center = [
+        ROCK_RING_RADIUS_PIXELS * slot_angle_radians.cos() + nudge_x,
+        ROCK_RING_RADIUS_PIXELS * slot_angle_radians.sin() + nudge_y,
+    ];
+    paint_ellipse(
+        layer_pixels,
+        center,
+        [half_width, half_height],
+        |[offset_x, offset_y], pixel_position| {
+            if offset_y > 0.0 && offset_x.hypot(offset_y / ROCK_UNDERSIDE_HEIGHT_FRACTION) > 1.0 {
+                return None;
+            }
+            let brightness = 0.5 + 0.5 * (-0.3 * offset_x - 0.75 * offset_y);
+            Some(choose_shade(&ROCK_RAMP, brightness, pixel_position))
+        },
+    );
+}
+
+/// Visit every pixel whose center an ellipse covers, giving `paint` the pixel's offset
+/// from the ellipse's center as a share of each half extent, and set the pixels it
+/// colors. The center is given from the frame center.
+fn paint_ellipse(
+    layer_pixels: &mut [[u8; 4]],
+    center_from_frame_center: [f64; 2],
+    half_extents: [f64; 2],
+    mut paint: impl FnMut([f64; 2], [u32; 2]) -> Option<[u8; 4]>,
+) {
+    let frame_width = FRAME_WIDTH_PIXELS as usize;
+    let center = [
+        center_from_frame_center[0] + f64::from(FRAME_WIDTH_PIXELS) / 2.0,
+        center_from_frame_center[1] + f64::from(FRAME_HEIGHT_PIXELS) / 2.0,
+    ];
+    let first_x = (center[0] - half_extents[0]).floor().max(0.0) as usize;
+    let last_x = ((center[0] + half_extents[0]).ceil().max(0.0) as usize).min(frame_width - 1);
+    let first_y = (center[1] - half_extents[1]).floor().max(0.0) as usize;
+    let last_y = ((center[1] + half_extents[1]).ceil().max(0.0) as usize)
+        .min(FRAME_HEIGHT_PIXELS as usize - 1);
+    for pixel_y in first_y..=last_y {
+        for pixel_x in first_x..=last_x {
+            let offset = [
+                (pixel_x as f64 + 0.5 - center[0]) / half_extents[0],
+                (pixel_y as f64 + 0.5 - center[1]) / half_extents[1],
+            ];
+            if offset[0].hypot(offset[1]) > 1.0 {
+                continue;
+            }
+            if let Some(pixel_color) = paint(offset, [pixel_x as u32, pixel_y as u32]) {
+                layer_pixels[pixel_y * frame_width + pixel_x] = pixel_color;
+            }
+        }
+    }
 }
 
 /// Where the mouth opens: on the snout's center line, just inside its front.
@@ -426,6 +642,172 @@ fn paint_feeding(
             PELLET_COLORS[1],
             1.0,
         );
+    }
+}
+
+/// Pale ripple colors for the wake, lighter nearer the tail.
+const WAKE_COLORS: [[u8; 4]; 2] = [[150, 205, 235, 255], [100, 170, 220, 255]];
+/// Pale colors for the water marks: the crest of each mark and its trough.
+const WATER_MARK_COLORS: [[u8; 4]; 2] = [[175, 218, 240, 255], [130, 190, 230, 255]];
+
+/// The wake: shallow chevrons of ripples trailing behind the tail fin on the water,
+/// each opening backward and spreading and thinning with distance. The wake strength,
+/// the pose's scaled by the pond's water, sets how many there are and how full; they drift back with the body wave, so each
+/// stroke's ripples move away from the tail and fade through the glide. Ripples fill
+/// only empty water, so they never touch the koi, and they are painted after the
+/// depth tint so they stay on the surface.
+fn paint_wake(
+    rgba_pixels: &mut [[u8; 4]],
+    body_spine: &[CurvePoint],
+    fin_curves: &[Vec<CurvePoint>],
+    pose_center: [f64; 2],
+    wake_strength: f64,
+    drift_phase_radians: f64,
+) {
+    const VISIBLE_STRENGTH: f64 = 0.05;
+    const WAKE_RIPPLE_COUNT: usize = 4;
+    const FIRST_RIPPLE_GAP_PIXELS: f64 = 3.0;
+    const RIPPLE_SPACING_PIXELS: f64 = 4.5;
+    /// Ripple half widths across the wake, from the nearest to the farthest.
+    const NEAREST_HALF_WIDTH_PIXELS: f64 = 1.0;
+    const FARTHEST_HALF_WIDTH_PIXELS: f64 = 5.0;
+    /// Each ripple bends back this far per pixel across, so it opens behind the koi.
+    const CHEVRON_SWEEP: f64 = 0.6;
+    /// The farthest ripple keeps this share of its pixels at full strength.
+    const FARTHEST_RIPPLE_SHARE: f64 = 0.35;
+    if wake_strength <= VISIBLE_STRENGTH {
+        return;
+    }
+    let frame_sizes = [
+        f64::from(FRAME_WIDTH_PIXELS),
+        f64::from(FRAME_HEIGHT_PIXELS),
+    ];
+    // The tail lobes are the first fin pair; the wake starts between their tips.
+    let [left_lobe, right_lobe] = [&fin_curves[0], &fin_curves[1]];
+    let left_tip = left_lobe[left_lobe.len() - 1].position;
+    let right_tip = right_lobe[right_lobe.len() - 1].position;
+    let tail_tip = [
+        (left_tip[0] + right_tip[0]) / 2.0,
+        (left_tip[1] + right_tip[1]) / 2.0,
+    ];
+    let forward_direction = calculate_forward_direction(body_spine, body_spine.len() - 1);
+    let backward_direction = [-forward_direction[0], -forward_direction[1]];
+    let across_direction = [-backward_direction[1], backward_direction[0]];
+    let drift_pixels = (drift_phase_radians / TAU).rem_euclid(1.0) * RIPPLE_SPACING_PIXELS;
+    let wake_length_pixels = RIPPLE_SPACING_PIXELS * WAKE_RIPPLE_COUNT as f64;
+    let ripple_count =
+        ((wake_strength * WAKE_RIPPLE_COUNT as f64).ceil() as usize).clamp(1, WAKE_RIPPLE_COUNT);
+    for ripple_index in 0..ripple_count {
+        let distance_pixels =
+            FIRST_RIPPLE_GAP_PIXELS + RIPPLE_SPACING_PIXELS * ripple_index as f64 + drift_pixels;
+        // How far the ripple has spread, from zero at the tail to one at the wake's end,
+        // measured from where it is, so a ripple drifting into the next place looks the
+        // same as the ripple that was there.
+        let spread_fraction =
+            ((distance_pixels - FIRST_RIPPLE_GAP_PIXELS) / wake_length_pixels).min(1.0);
+        let dither_limit = wake_strength * (1.0 - (1.0 - FARTHEST_RIPPLE_SHARE) * spread_fraction);
+        let ripple_color = WAKE_COLORS[usize::from(spread_fraction > 0.3)];
+        let half_width_pixels = interpolate(
+            NEAREST_HALF_WIDTH_PIXELS,
+            FARTHEST_HALF_WIDTH_PIXELS,
+            spread_fraction,
+        );
+        let mut across_pixels = -half_width_pixels.floor();
+        while across_pixels <= half_width_pixels {
+            let swept_distance_pixels = distance_pixels + CHEVRON_SWEEP * across_pixels.abs();
+            let ripple_point = [0, 1].map(|axis_index| {
+                tail_tip[axis_index]
+                    + backward_direction[axis_index] * swept_distance_pixels
+                    + across_direction[axis_index] * across_pixels
+                    - pose_center[axis_index]
+                    + frame_sizes[axis_index] / 2.0
+            });
+            across_pixels += 1.0;
+            paint_water_pixel(rgba_pixels, ripple_point, ripple_color, dither_limit);
+        }
+    }
+}
+
+/// Water marks: short wavy strokes scattered over the water, as many as the pond
+/// says, placed by the account seed so every pond differs, sliding and breathing once
+/// per loop so they shimmer. More marks add to the same places, so a livelier week
+/// keeps the marks a quieter one had. They fill only empty water, after the koi and
+/// its wake, so the koi passes over them and the rocks lie under them.
+fn paint_water_marks(
+    rgba_pixels: &mut [[u8; 4]],
+    identity_seed: u64,
+    water_phase: f64,
+    mark_count: usize,
+) {
+    const MIN_HALF_WIDTH_PIXELS: u64 = 3;
+    const EXTRA_HALF_WIDTH_PIXELS: u64 = 4;
+    const WAVE_HEIGHT_PIXELS: f64 = 1.2;
+    const WAVE_RADIANS_PER_PIXEL: f64 = 0.8;
+    const SHIMMER_CYCLES_PER_LOOP: f64 = 1.0;
+    /// A mark never drops below this share of its pixels as it breathes.
+    const DIMMEST_SHIMMER: f64 = 0.55;
+    /// The ends of a mark thin out by this share.
+    const END_FADE: f64 = 0.5;
+    /// Marks stay this far from the frame edge, so none is cut off.
+    const EDGE_MARGIN_PIXELS: u64 = 10;
+    let mut seed_state = identity_seed ^ 0xD1B5_4A32_D192_ED03;
+    let mut next_number = || {
+        seed_state = seed_state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        seed_state >> 33
+    };
+    for _ in 0..mark_count {
+        let center_x = (EDGE_MARGIN_PIXELS
+            + next_number() % (u64::from(FRAME_WIDTH_PIXELS) - 2 * EDGE_MARGIN_PIXELS))
+            as f64
+            + 0.5;
+        let center_y = (EDGE_MARGIN_PIXELS
+            + next_number() % (u64::from(FRAME_HEIGHT_PIXELS) - 2 * EDGE_MARGIN_PIXELS))
+            as f64
+            + 0.5;
+        let half_width_pixels =
+            (MIN_HALF_WIDTH_PIXELS + next_number() % (EXTRA_HALF_WIDTH_PIXELS + 1)) as i64;
+        let mark_phase_radians = (next_number() % 16) as f64 * TAU / 16.0;
+        let shimmer_radians = mark_phase_radians + water_phase * TAU * SHIMMER_CYCLES_PER_LOOP;
+        let shimmer =
+            DIMMEST_SHIMMER + (1.0 - DIMMEST_SHIMMER) * (0.5 + 0.5 * shimmer_radians.sin());
+        for across_pixels in -half_width_pixels..=half_width_pixels {
+            let wave = (across_pixels as f64 * WAVE_RADIANS_PER_PIXEL + shimmer_radians).sin();
+            let end_fraction = across_pixels as f64 / half_width_pixels as f64;
+            let dither_limit = shimmer * (1.0 - END_FADE * end_fraction * end_fraction);
+            paint_water_pixel(
+                rgba_pixels,
+                [
+                    center_x + across_pixels as f64,
+                    center_y + (wave * WAVE_HEIGHT_PIXELS).round(),
+                ],
+                WATER_MARK_COLORS[usize::from(wave <= 0.0)],
+                dither_limit,
+            );
+        }
+    }
+}
+
+/// Color one empty pixel of water at a frame position, if the dither allows it. The
+/// outermost row and column stay clear, as they do around the koi.
+fn paint_water_pixel(
+    rgba_pixels: &mut [[u8; 4]],
+    frame_point: [f64; 2],
+    color: [u8; 4],
+    dither_limit: f64,
+) {
+    let [pixel_x, pixel_y] = frame_point.map(f64::floor);
+    if !(1.0..f64::from(FRAME_WIDTH_PIXELS) - 1.0).contains(&pixel_x)
+        || !(1.0..f64::from(FRAME_HEIGHT_PIXELS) - 1.0).contains(&pixel_y)
+    {
+        return;
+    }
+    let pixel_index = pixel_y as usize * FRAME_WIDTH_PIXELS as usize + pixel_x as usize;
+    if rgba_pixels[pixel_index][3] == 0
+        && calculate_dither_threshold([pixel_x as u32, pixel_y as u32]) < dither_limit
+    {
+        rgba_pixels[pixel_index] = color;
     }
 }
 

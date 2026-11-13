@@ -3,9 +3,105 @@ use std::collections::BTreeMap;
 use chrono::{Days, NaiveDate};
 use git_koi::history::{
     AccountSnapshot, ConflictingRepository, ContributionDay, ContributionHistory,
-    ContributionHistoryError, LanguageColor,
+    ContributionHistoryError, DayActivity, LanguageColor,
 };
-use git_koi::koi::{KoiDevelopmentError, RecentActivity, RecentStreak, derive_koi_development};
+use git_koi::koi::{
+    DailyActivityError, KoiDevelopmentError, POND_DAY_COUNT, RecentActivity, RecentStreak,
+    derive_koi_development,
+};
+
+#[test]
+fn development_carries_the_weeks_issues_and_pull_requests_oldest_first() {
+    let pond_snapshot: AccountSnapshot =
+        serde_json::from_str(include_str!("fixtures/account-with-pond.json")).unwrap();
+    let koi_development = derive_koi_development(&pond_snapshot).unwrap();
+    assert_eq!(
+        koi_development.daily_activity.len(),
+        POND_DAY_COUNT as usize
+    );
+    assert_eq!(
+        koi_development.daily_activity.last().unwrap(),
+        &DayActivity {
+            date: koi_development.observed_on,
+            issues_opened: 2,
+            pull_requests_opened: 0,
+        }
+    );
+    assert!(
+        koi_development
+            .daily_activity
+            .windows(2)
+            .all(|days| days[0].date < days[1].date)
+    );
+
+    // Reordered and repeated entries derive the same week.
+    let mut shuffled_snapshot = pond_snapshot.clone();
+    let shuffled_activity = shuffled_snapshot.daily_activity.as_mut().unwrap();
+    shuffled_activity.reverse();
+    shuffled_activity.push(shuffled_activity[0].clone());
+    assert_eq!(
+        derive_koi_development(&shuffled_snapshot).unwrap(),
+        koi_development
+    );
+
+    // A snapshot from before version 4 has no week.
+    let history_snapshot: AccountSnapshot =
+        serde_json::from_str(include_str!("fixtures/account-with-history.json")).unwrap();
+    assert!(
+        derive_koi_development(&history_snapshot)
+            .unwrap()
+            .daily_activity
+            .is_empty()
+    );
+}
+
+#[test]
+fn daily_activity_outside_the_week_or_in_conflict_fails() {
+    let pond_snapshot: AccountSnapshot =
+        serde_json::from_str(include_str!("fixtures/account-with-pond.json")).unwrap();
+    let observed_on = pond_snapshot
+        .contribution_history
+        .as_ref()
+        .unwrap()
+        .observed_on;
+    let day_with = |date: NaiveDate, issues_opened: u32| DayActivity {
+        date,
+        issues_opened,
+        pull_requests_opened: 0,
+    };
+    let derive_with_day = |extra_day: DayActivity| {
+        let mut snapshot = pond_snapshot.clone();
+        snapshot.daily_activity.as_mut().unwrap().push(extra_day);
+        derive_koi_development(&snapshot)
+    };
+
+    let tomorrow = observed_on + Days::new(1);
+    assert_eq!(
+        derive_with_day(day_with(tomorrow, 1)),
+        Err(KoiDevelopmentError::DailyActivity(
+            DailyActivityError::AfterObservationDate(tomorrow)
+        ))
+    );
+    let eight_days_ago = observed_on - Days::new(POND_DAY_COUNT);
+    assert_eq!(
+        derive_with_day(day_with(eight_days_ago, 1)),
+        Err(KoiDevelopmentError::DailyActivity(
+            DailyActivityError::OutsideWeek(eight_days_ago)
+        ))
+    );
+    assert_eq!(
+        derive_with_day(day_with(observed_on, 9)),
+        Err(KoiDevelopmentError::DailyActivity(
+            DailyActivityError::ConflictingDate(observed_on)
+        ))
+    );
+    assert!(
+        derive_with_day(day_with(observed_on, 9))
+            .unwrap_err()
+            .to_string()
+            .contains(&observed_on.to_string())
+    );
+}
 
 #[test]
 fn identity_survives_growth_and_language_changes_but_distinguishes_accounts() {

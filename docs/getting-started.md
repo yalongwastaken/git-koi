@@ -37,6 +37,19 @@ when it changed, so an unchanged koi adds no commit.
 | `output-dir` | `koi`                | Folder that receives `koi.gif`, `koi.png`, `preview.html` |
 | `token`      | The built-in token   | Token for reading the account's public data               |
 
+The koi swims in a pond. Each of the last seven days on which you opened an
+issue floats a lily pad, and each day on which you opened a pull request settles
+a rock, newest nearest the top right. One opened that day makes a small one, two
+or three a medium one, and four or more a large one. A quiet week leaves the
+water clear.
+
+While the koi swims, each stroke of its tail leaves ripples on the water behind
+it that drift back and fade through the glide, as much wake as the day's
+contributions earn: a quarter on a day without any, full at ten or more. Marks
+of moving water shimmer across the pond, as many as the week's contributions
+earn: none after a week without any, twenty at a hundred or more. The still
+shows the koi and its pond on calm water.
+
 To change the body, edit `body` in your copy of the workflow; pushing the change
 runs the workflow and redraws the koi. If you change `output-dir`, change the
 commit step's path and the README image to match. The example uses
@@ -78,10 +91,11 @@ light and dark page colors. `--body` takes `white`, the default, `black`,
 `asagi`, `tea`, `gold`, or `platinum`.
 
 `collect` reads only public data: the account's public repositories, the public
-repositories it has contributed to, GitHub's color for each language, and its
-daily contributions from the account's creation through the last complete UTC
-day. It writes the snapshot to standard output, or with `--output` replaces the
-file only after collection succeeds. In GitHub Actions, `GH_TOKEN` set to the
+repositories it has contributed to, GitHub's color for each language, its daily
+contributions from the account's creation through the last complete UTC day, and
+the issues and pull requests it opened on each of the last seven of those days.
+It writes the snapshot to standard output, or with `--output` replaces the file
+only after collection succeeds. In GitHub Actions, `GH_TOKEN` set to the
 workflow's token is enough. `render` draws everything in memory first and
 replaces each file through a temporary file, so a failed run keeps the previous
 files. Both print errors to standard error and exit 1; invalid usage exits 2.
@@ -97,7 +111,9 @@ cargo add git-koi serde_json
 ```
 
 The pipeline runs one way. Read or collect an `AccountSnapshot`, derive the
-koi's development, choose the day's behavior, render frames, and encode them:
+koi's development, choose the day's behavior, render frames, and encode them.
+The renderer lays out the pond itself from the development's daily activity;
+`pond::lay_out_pond` gives the same layout for callers that want to describe it:
 
 ```rust
 use git_koi::behavior::select_behavior;

@@ -8,7 +8,8 @@ use chrono::{Datelike, Days, IsoWeek, NaiveDate, Weekday};
 
 use crate::history::{
     AccountSnapshot, ConflictingRepository, ContributionHistoryError, ContributionSummary,
-    ContributionWeek, LanguageColor, calculate_language_shares, summarize_contributions,
+    ContributionWeek, DayActivity, LanguageColor, calculate_language_shares,
+    summarize_contributions,
 };
 
 /// Derived inputs for appearance; source observations remain in the account snapshot.
@@ -28,7 +29,14 @@ pub struct KoiDevelopment {
     pub streaks: StreakDevelopment,
     /// Counts around the observation date that behavior selection reads.
     pub recent_activity: RecentActivity,
+    /// Issues and pull requests opened on each observed day of the [`POND_DAY_COUNT`]
+    /// days ending on the observation date, oldest first, for the pond around the
+    /// koi. Empty when the snapshot predates them.
+    pub daily_activity: Vec<DayActivity>,
 }
+
+/// The pond shows the days ending on the observation date, this many in all.
+pub const POND_DAY_COUNT: u64 = 7;
 
 /// Recent activity as of the observation date, as counts rather than judgments.
 #[derive(Debug, Eq, PartialEq)]
@@ -81,13 +89,24 @@ pub enum RecentStreak {
 /// unavailable history never becomes an undeveloped koi. Confirmed empty history
 /// produces zero contributions and no streaks. Every counted language needs a
 /// recorded color, so a snapshot without colors fails instead of producing an
-/// uncolored koi. Inputs are borrowed without mutation; this operation performs
-/// no I/O and reads no clock. It assigns no visual thresholds.
+/// uncolored koi. Daily activity is kept in date order with identical duplicates
+/// merged; a day after the observation date, a day outside the pond's week, or two
+/// counts for one day fail rather than guess. Inputs are borrowed without mutation;
+/// this operation performs no I/O and reads no clock. It assigns no visual
+/// thresholds.
 pub fn derive_koi_development(
     account_snapshot: &AccountSnapshot,
 ) -> Result<KoiDevelopment, KoiDevelopmentError> {
     let contribution_summary = summarize_contributions(account_snapshot)
         .map_err(KoiDevelopmentError::ContributionHistory)?;
+    let daily_activity = normalize_daily_activity(
+        account_snapshot
+            .daily_activity
+            .as_deref()
+            .unwrap_or_default(),
+        contribution_summary.observed_on,
+    )
+    .map_err(KoiDevelopmentError::DailyActivity)?;
     let language_shares =
         calculate_language_shares(account_snapshot).map_err(KoiDevelopmentError::Repositories)?;
     let recorded_colors = account_snapshot
@@ -111,8 +130,66 @@ pub fn derive_koi_development(
         observed_on: contribution_summary.observed_on,
         streaks: calculate_streak_development(&contribution_summary),
         recent_activity: measure_recent_activity(&contribution_summary),
+        daily_activity,
     })
 }
+
+fn normalize_daily_activity(
+    daily_activity: &[DayActivity],
+    observed_on: NaiveDate,
+) -> Result<Vec<DayActivity>, DailyActivityError> {
+    let week_start = observed_on
+        .checked_sub_days(Days::new(POND_DAY_COUNT - 1))
+        .expect("observation dates are far from the calendar's start");
+    let mut days_by_date: BTreeMap<NaiveDate, &DayActivity> = BTreeMap::new();
+    for day_activity in daily_activity {
+        if day_activity.date > observed_on {
+            return Err(DailyActivityError::AfterObservationDate(day_activity.date));
+        }
+        if day_activity.date < week_start {
+            return Err(DailyActivityError::OutsideWeek(day_activity.date));
+        }
+        if let Some(previous_day) = days_by_date.insert(day_activity.date, day_activity)
+            && previous_day != day_activity
+        {
+            return Err(DailyActivityError::ConflictingDate(day_activity.date));
+        }
+    }
+    Ok(days_by_date.into_values().cloned().collect())
+}
+
+/// Why a snapshot's daily activity could not be used. Each message names the repair.
+#[derive(Debug, Eq, PartialEq)]
+pub enum DailyActivityError {
+    /// An entry is dated after the observation date.
+    AfterObservationDate(NaiveDate),
+    /// An entry is dated before the [`POND_DAY_COUNT`] days ending on the observation
+    /// date.
+    OutsideWeek(NaiveDate),
+    /// Two entries for this date carry different counts.
+    ConflictingDate(NaiveDate),
+}
+
+impl fmt::Display for DailyActivityError {
+    fn fmt(&self, output_formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AfterObservationDate(date) => write!(
+                output_formatter,
+                "daily activity for {date} is after the observation date; collect the snapshot again"
+            ),
+            Self::OutsideWeek(date) => write!(
+                output_formatter,
+                "daily activity for {date} is more than {POND_DAY_COUNT} days before the observation date; collect the snapshot again"
+            ),
+            Self::ConflictingDate(date) => write!(
+                output_formatter,
+                "conflicting daily activity for {date}; collect a consistent snapshot"
+            ),
+        }
+    }
+}
+
+impl Error for DailyActivityError {}
 
 /// Young koi show their language pigments pale until this total.
 pub const FULL_COLOR_CONTRIBUTIONS: u64 = 500;
@@ -145,6 +222,8 @@ pub enum KoiDevelopmentError {
     MissingLanguageColors,
     /// The snapshot has no color entry for this counted language.
     MissingLanguageColor(String),
+    /// The snapshot's daily activity failed its rules.
+    DailyActivity(DailyActivityError),
 }
 
 impl fmt::Display for KoiDevelopmentError {
@@ -152,6 +231,7 @@ impl fmt::Display for KoiDevelopmentError {
         match self {
             Self::ContributionHistory(history_error) => write!(output_formatter, "{history_error}"),
             Self::Repositories(repository_error) => write!(output_formatter, "{repository_error}"),
+            Self::DailyActivity(activity_error) => write!(output_formatter, "{activity_error}"),
             Self::MissingLanguageColors => write!(
                 output_formatter,
                 "the snapshot has no language colors; collect it again with `git-koi collect`"
@@ -169,6 +249,7 @@ impl Error for KoiDevelopmentError {
         match self {
             Self::ContributionHistory(history_error) => Some(history_error),
             Self::Repositories(repository_error) => Some(repository_error),
+            Self::DailyActivity(activity_error) => Some(activity_error),
             Self::MissingLanguageColors | Self::MissingLanguageColor(_) => None,
         }
     }

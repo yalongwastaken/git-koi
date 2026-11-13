@@ -7,10 +7,11 @@ use git_koi::motion::{Course, SwimPose, calculate_swim_pose, frame_count};
 /// so is compared around the circle.
 type PoseValue = (&'static str, fn(&SwimPose) -> f64, bool);
 
-const POSE_VALUES: [PoseValue; 17] = [
+const POSE_VALUES: [PoseValue; 18] = [
     ("lap angle", read_lap_angle, true),
     ("wave phase", |pose| pose.wave_phase_radians, true),
     ("wave strength", |pose| pose.wave_strength, false),
+    ("wake strength", |pose| pose.wake_strength, false),
     (
         "left tail lobe",
         |pose| pose.tail_lobe_bends_radians[0],
@@ -53,12 +54,13 @@ const POSE_VALUES: [PoseValue; 17] = [
 ];
 
 /// The largest step each pose value may take between frames, in POSE_VALUES order.
-const STEP_LIMITS: [(Behavior, [f64; 17]); 5] = [
+const STEP_LIMITS: [(Behavior, [f64; 18]); 5] = [
     (
         Behavior::Cruise,
         [
             0.08,
             TAU / 8.0 + 1e-9,
+            0.1,
             0.1,
             0.55,
             0.55,
@@ -82,6 +84,7 @@ const STEP_LIMITS: [(Behavior, [f64; 17]); 5] = [
             0.33,
             TAU / 6.0 + 1e-9,
             0.42,
+            0.31,
             1.05,
             1.05,
             0.2,
@@ -104,6 +107,7 @@ const STEP_LIMITS: [(Behavior, [f64; 17]); 5] = [
             0.0,
             TAU / 15.0 + 1e-9,
             0.1,
+            0.07,
             0.15,
             0.15,
             0.0,
@@ -126,6 +130,7 @@ const STEP_LIMITS: [(Behavior, [f64; 17]); 5] = [
             0.0,
             TAU / 30.0 + 1e-9,
             0.02,
+            0.0,
             0.05,
             0.05,
             0.0,
@@ -148,6 +153,7 @@ const STEP_LIMITS: [(Behavior, [f64; 17]); 5] = [
             0.0,
             TAU / 15.0 + 1e-9,
             0.1,
+            0.07,
             0.15,
             0.15,
             0.0,
@@ -310,6 +316,41 @@ fn deep_rest_flicks_one_fin_once_per_loop() {
 }
 
 #[test]
+fn the_wake_follows_the_stroke_and_vanishes_in_deep_rest() {
+    let peak = |behavior| {
+        collect_loop(behavior)
+            .iter()
+            .map(|pose| pose.wake_strength)
+            .fold(0.0_f64, f64::max)
+    };
+    let trough = |behavior| {
+        collect_loop(behavior)
+            .iter()
+            .map(|pose| pose.wake_strength)
+            .fold(1.0_f64, f64::min)
+    };
+    for behavior in [Behavior::Cruise, Behavior::Dart] {
+        assert!(peak(behavior) > 0.95, "{behavior:?}");
+        assert_eq!(trough(behavior), 0.0, "{behavior:?}");
+        // The wake peaks with the wave the stroke drives.
+        let poses = collect_loop(behavior);
+        let strongest_wave = poses
+            .iter()
+            .max_by(|first, second| first.wave_strength.total_cmp(&second.wave_strength))
+            .unwrap();
+        assert!(strongest_wave.wake_strength > 0.95);
+    }
+    assert!(peak(Behavior::Rest) > 0.2 && peak(Behavior::Rest) < 0.5);
+    assert_eq!(peak(Behavior::SurfaceFeeding), peak(Behavior::Rest));
+    assert_eq!(peak(Behavior::DeepRest), 0.0);
+    assert!(
+        collect_loop(Behavior::Cruise)
+            .iter()
+            .all(|pose| (0.0..=1.0).contains(&pose.wake_strength))
+    );
+}
+
+#[test]
 fn surface_feeding_rests_at_the_surface_with_ripples_on_its_own_beat() {
     assert_eq!(
         frame_count(Behavior::SurfaceFeeding),
@@ -389,7 +430,7 @@ fn the_mouth_breathes_while_lapping_and_gulps_while_resting() {
     assert!(open_frames.contains(&70) && open_frames.contains(&78));
 }
 
-fn assert_pose_values_flow(behavior: Behavior, step_limits: [f64; 17]) {
+fn assert_pose_values_flow(behavior: Behavior, step_limits: [f64; 18]) {
     let loop_frame_count = frame_count(behavior) as usize;
     let mut poses = collect_loop(behavior);
     poses.push(calculate_swim_pose(behavior, loop_frame_count as u32));
