@@ -1,10 +1,14 @@
+use std::io::Cursor;
 use std::sync::OnceLock;
 
 use git_koi::behavior::Behavior;
 use git_koi::coat::KoiBody;
 use git_koi::history::AccountSnapshot;
 use git_koi::koi::derive_koi_development;
-use git_koi::output::{GifEncodingError, STATIC_HEIGHT_PIXELS, STATIC_WIDTH_PIXELS, encode_gif};
+use git_koi::output::{
+    GifEncodingError, STATIC_HEIGHT_PIXELS, STATIC_WIDTH_PIXELS, encode_gif, encode_png,
+    encode_preview_html,
+};
 use git_koi::render::{FRAME_WIDTH_PIXELS, KoiFrame, render_swim_frame};
 
 #[test]
@@ -73,6 +77,43 @@ fn the_gif_repeats_forever_at_fifteen_frames_per_second() {
     }
     assert_eq!(frame_delays, [7, 6, 7, 7, 6, 7]);
     assert_eq!(gif_decoder.repeat(), gif::Repeat::Infinite);
+}
+
+#[test]
+fn the_preview_declares_each_image_at_the_size_it_is_encoded() {
+    let (koi_frames, gif_bytes) = encoded_feeding_excerpt();
+    let gif_decoder = gif::DecodeOptions::new()
+        .read_info(gif_bytes.as_slice())
+        .unwrap();
+    let gif_size = (
+        u32::from(gif_decoder.width()),
+        u32::from(gif_decoder.height()),
+    );
+    let png_bytes = encode_png(&koi_frames[0]).unwrap();
+    let png_reader = png::Decoder::new(Cursor::new(png_bytes.as_slice()))
+        .read_info()
+        .unwrap();
+    let png_size = (png_reader.info().width, png_reader.info().height);
+
+    let preview_html = encode_preview_html("caption");
+    let mut declared_sources = Vec::new();
+    for image_tag in preview_html.split("<img ").skip(1) {
+        let image_tag = &image_tag[..image_tag.find('>').unwrap()];
+        let ((width, height), source) = if image_tag.contains(r#"src="koi.gif""#) {
+            (gif_size, "koi.gif")
+        } else if image_tag.contains(r#"src="koi.png""#) {
+            (png_size, "koi.png")
+        } else {
+            panic!("the preview shows an image it was not given: {image_tag}");
+        };
+        assert!(
+            image_tag.contains(&format!(r#"width="{width}" height="{height}""#)),
+            "{image_tag}"
+        );
+        declared_sources.push(source);
+    }
+    assert!(declared_sources.contains(&"koi.gif"));
+    assert!(declared_sources.contains(&"koi.png"));
 }
 
 #[test]

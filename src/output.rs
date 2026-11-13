@@ -95,34 +95,36 @@ const PREVIEW_HEAD: &str = r#"<!doctype html>
 </head>
 <body>
 <header class="light"><h1>"#;
-const PREVIEW_PANELS: &str = r#"</h1></header>
-<section class="light">
-<h2>GitHub light</h2>
-<div class="images">
-<figure><img src="koi.gif" width="512" height="512" alt="The koi swimming"><figcaption>koi.gif</figcaption></figure>
-<figure><img src="koi.png" width="512" height="512" alt="The koi, still"><figcaption>koi.png</figcaption></figure>
-</div>
-</section>
-<section class="dark">
-<h2>GitHub dark</h2>
-<div class="images">
-<figure><img src="koi.gif" width="512" height="512" alt="The koi swimming"><figcaption>koi.gif</figcaption></figure>
-<figure><img src="koi.png" width="512" height="512" alt="The koi, still"><figcaption>koi.png</figcaption></figure>
-</div>
-</section>
-</body>
-</html>
-"#;
 
 /// Build a page that previews `koi.gif` and `koi.png`, read from beside it, on GitHub's
-/// light and dark page colors under the given caption. It draws nothing itself and loads
-/// no scripts or outside files, so it shows exactly what was generated.
+/// light and dark page colors under the given caption. Each image is declared at the
+/// export size, so it shows one image pixel per page pixel. The page draws nothing itself
+/// and loads no scripts or outside files, so it shows exactly what was generated.
 pub fn encode_preview_html(caption: &str) -> String {
     let escaped_caption = caption
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;");
-    format!("{PREVIEW_HEAD}{escaped_caption}{PREVIEW_PANELS}")
+    let preview_images = format!(
+        r#"<div class="images">
+<figure><img src="koi.gif" width="{STATIC_WIDTH_PIXELS}" height="{STATIC_HEIGHT_PIXELS}" alt="The koi swimming"><figcaption>koi.gif</figcaption></figure>
+<figure><img src="koi.png" width="{STATIC_WIDTH_PIXELS}" height="{STATIC_HEIGHT_PIXELS}" alt="The koi, still"><figcaption>koi.png</figcaption></figure>
+</div>"#
+    );
+    format!(
+        r#"{PREVIEW_HEAD}{escaped_caption}</h1></header>
+<section class="light">
+<h2>GitHub light</h2>
+{preview_images}
+</section>
+<section class="dark">
+<h2>GitHub dark</h2>
+{preview_images}
+</section>
+</body>
+</html>
+"#
+    )
 }
 
 /// One GIF palette holds 256 entries, and one of them marks transparent pixels.
