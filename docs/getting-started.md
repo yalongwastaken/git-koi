@@ -84,8 +84,9 @@ day. It writes the snapshot to standard output, or with `--output` replaces the
 file only after collection succeeds. In GitHub Actions, `GH_TOKEN` set to the
 workflow's token is enough. `render` draws everything in memory first and
 replaces each file through a temporary file, so a failed run keeps the previous
-files. Both print errors to standard error and exit 1; invalid usage exits 2.
-`git-koi --help` prints the full usage and `git-koi --version` the version.
+files; a run that succeeds prints nothing. Both print errors to standard error
+and exit 1; invalid usage exits 2. `git-koi --help` prints the full usage and
+`git-koi --version` the version.
 
 ## As a Library
 
