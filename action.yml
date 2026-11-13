@@ -38,12 +38,17 @@ runs:
           Linux-ARM64) target=aarch64-unknown-linux-musl ;;
           macOS-X64) target=x86_64-apple-darwin ;;
           macOS-ARM64) target=aarch64-apple-darwin ;;
+          Windows-X64) target=x86_64-pc-windows-msvc ;;
           *)
             echo "git-koi has no build for $RUNNER_OS $RUNNER_ARCH; use ubuntu-latest" >&2
             exit 1
             ;;
         esac
-        archive="git-koi-$version-$target.tar.gz"
+        if [ "$RUNNER_OS" = Windows ]; then
+          archive="git-koi-$version-$target.zip"
+        else
+          archive="git-koi-$version-$target.tar.gz"
+        fi
         install_dir="$RUNNER_TEMP/git-koi"
         mkdir -p "$install_dir"
         if ! gh release download "v$version" --repo "$repository" --dir "$install_dir" \
@@ -57,7 +62,11 @@ runs:
         else
           shasum -a 256 -c "$archive.sha256"
         fi
-        tar -xzf "$archive"
+        if [ "$RUNNER_OS" = Windows ]; then
+          unzip -q "$archive"
+        else
+          tar -xzf "$archive"
+        fi
         echo "$install_dir/git-koi-$version-$target" >> "$GITHUB_PATH"
     - name: Collect the account snapshot
       shell: bash

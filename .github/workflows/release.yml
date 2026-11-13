@@ -122,7 +122,11 @@ jobs:
 
   smoke:
     needs: release
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -132,7 +136,7 @@ jobs:
           output-dir: koi-output
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: koi
+          name: koi-${{ matrix.runner }}
           path: koi-output/
           if-no-files-found: error
 
