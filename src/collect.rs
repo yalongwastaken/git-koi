@@ -398,7 +398,9 @@ pub enum CollectionError {
         /// The first day the calendar reported, or `None` when it reported none.
         first_reported_on: Option<NaiveDate>,
     },
-    /// The collected days break the history rules; carries the rule.
+    /// The collected days break the history rules; carries the rule. GitHub produced
+    /// the days, so a day it left out or reported twice asks the operator to try again
+    /// rather than to repair a snapshot.
     InvalidHistory(ContributionHistoryError),
     /// Two observations of one repository disagree.
     ConflictingRepository(ConflictingRepository),
@@ -438,6 +440,18 @@ impl fmt::Display for CollectionError {
                 output_formatter,
                 "GitHub reported no contribution days since the account was created on {created_on}; try again"
             ),
+            Self::InvalidHistory(ContributionHistoryError::MissingDate(missing_date)) => {
+                write!(
+                    output_formatter,
+                    "GitHub's contribution calendar left out {missing_date}; try again later, and report it if it keeps happening"
+                )
+            }
+            Self::InvalidHistory(ContributionHistoryError::ConflictingDate(conflicting_date)) => {
+                write!(
+                    output_formatter,
+                    "GitHub reported two contribution counts for {conflicting_date}; try again"
+                )
+            }
             Self::InvalidHistory(history_error) => {
                 write!(
                     output_formatter,

@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- When GitHub's contribution calendar leaves out a day or reports one twice,
+  `git-koi collect` says so and asks to try again, instead of naming a repair
+  only the author of a snapshot file can make (#56).
+
 ## [1.0.2] - 2026-10-31
 
 ### Fixed

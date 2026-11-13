@@ -209,6 +209,63 @@ fn calendar_gaps_fail_instead_of_shortening_the_history() {
 }
 
 #[test]
+fn a_day_github_leaves_out_asks_the_operator_to_try_again_not_to_add_it() {
+    let github = RecordedGitHub {
+        calendar: |from, to| Ok(calendar_response(from, to, |day| day != date("2025-06-01"))),
+        ..RecordedGitHub::new()
+    };
+    assert_operator_repair(
+        &github,
+        &ContributionHistoryError::MissingDate(date("2025-06-01")),
+    );
+}
+
+#[test]
+fn a_day_github_reports_twice_asks_the_operator_to_try_again() {
+    let github = RecordedGitHub {
+        calendar: |from, to| {
+            let mut calendar = calendar_response(from, to, |_| true);
+            let reported_again = json!({ "date": from.to_string(), "contributionCount": 99 });
+            calendar["user"]["contributionsCollection"]["contributionCalendar"]["weeks"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "contributionDays": [reported_again] }));
+            Ok(calendar)
+        },
+        ..RecordedGitHub::new()
+    };
+    assert_operator_repair(
+        &github,
+        &ContributionHistoryError::ConflictingDate(date("2024-11-20")),
+    );
+}
+
+/// Collection fails with the history rule, but its message names the date and a repair
+/// the operator can make instead of the repair the rule names for a snapshot's author.
+fn assert_operator_repair(github: &RecordedGitHub, snapshot_error: &ContributionHistoryError) {
+    let collection_error = collect_account_snapshot(github, LOGIN, date("2026-01-03")).unwrap_err();
+    let CollectionError::InvalidHistory(history_error) = &collection_error else {
+        panic!("expected the history rule, got {collection_error:?}");
+    };
+    assert_eq!(history_error, snapshot_error);
+    let operator_message = collection_error.to_string();
+    let snapshot_date = match snapshot_error {
+        ContributionHistoryError::MissingDate(snapshot_date)
+        | ContributionHistoryError::ConflictingDate(snapshot_date) => snapshot_date.to_string(),
+        other => panic!("no operator repair is expected for {other:?}"),
+    };
+    assert!(
+        operator_message.contains(&snapshot_date),
+        "{operator_message}"
+    );
+    assert!(operator_message.contains("try again"), "{operator_message}");
+    assert!(
+        !operator_message.contains(&snapshot_error.to_string()),
+        "{operator_message}"
+    );
+}
+
+#[test]
 fn a_calendar_starting_after_account_creation_fails() {
     let github = RecordedGitHub {
         calendar: |from, to| Ok(calendar_response(from, to, |day| day >= date("2024-12-01"))),
