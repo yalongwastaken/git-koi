@@ -17,8 +17,26 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust
+        id: rust
         run: |
           rustup toolchain install stable --profile minimal -c rustfmt,clippy
+          echo "release=$(rustc +stable --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+      # Keyed on the compiler as well as the lock file: a build restored for an older
+      # compiler is rebuilt from scratch, and an exact key hit is never saved again.
+      - name: Cache the Cargo build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key:
+            ${{ github.job }}-${{ runner.os }}-rust-${{
+            steps.rust.outputs.release }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys:
+            ${{ github.job }}-${{ runner.os }}-rust-${{
+            steps.rust.outputs.release }}-
       - name: Check formatting
         run: cargo +stable fmt --all -- --check
       - name: Lint
@@ -45,6 +63,23 @@ jobs:
           rust_version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
           echo "RUST_VERSION=$rust_version" >> "$GITHUB_ENV"
       - name: Install it
-        run: rustup toolchain install "$RUST_VERSION" --profile minimal
+        id: rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          echo "release=$(rustc "+$RUST_VERSION" --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+      - name: Cache the Cargo build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key:
+            ${{ github.job }}-${{ runner.os }}-rust-${{
+            steps.rust.outputs.release }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys:
+            ${{ github.job }}-${{ runner.os }}-rust-${{
+            steps.rust.outputs.release }}-
       - name: Check on it
         run: cargo "+$RUST_VERSION" check --locked --all-targets
