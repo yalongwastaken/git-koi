@@ -4,7 +4,9 @@
 //! pixel art stays crisp: [`encode_png`] for the still, [`encode_svg`] for a vector
 //! document of the same pixels, [`encode_gif`] for a behavior's loop, and
 //! [`encode_preview_html`] for a page that shows the GIF and PNG beside it on GitHub's
-//! light and dark page colors.
+//! light and dark page colors. Each export is the size of its frame's pond; the
+//! `_scaled` encoders take another whole-number scale, such as one for a large pond
+//! whose GIF would otherwise be too heavy for phones to play.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -16,25 +18,43 @@ use crate::render::{FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, KoiFrame};
 
 /// Each native pixel becomes this many export pixels on each side.
 pub const STATIC_EXPORT_SCALE: u32 = 2;
-/// Width of every exported image.
+/// Width of every exported image of the default pond.
 pub const STATIC_WIDTH_PIXELS: u32 = FRAME_WIDTH_PIXELS * STATIC_EXPORT_SCALE;
-/// Height of every exported image.
+/// Height of every exported image of the default pond.
 pub const STATIC_HEIGHT_PIXELS: u32 = FRAME_HEIGHT_PIXELS * STATIC_EXPORT_SCALE;
+/// The largest whole-number scale the `_scaled` encoders accept.
+pub const MAX_EXPORT_SCALE: u32 = 4;
 
 /// Encode a static PNG by repeating each native pixel in both dimensions.
 /// Preserve its color and alpha without interpolation, timestamps, I/O, or mutation.
 /// Encoding errors propagate before the caller publishes any resulting bytes.
 pub fn encode_png(koi_frame: &KoiFrame) -> Result<Vec<u8>, png::EncodingError> {
+    encode_png_scaled(koi_frame, STATIC_EXPORT_SCALE)
+}
+
+/// Encode a static PNG as `encode_png` does, at a whole-number scale from one through
+/// [`MAX_EXPORT_SCALE`].
+///
+/// # Panics
+///
+/// If the scale is outside that range.
+pub fn encode_png_scaled(
+    koi_frame: &KoiFrame,
+    export_scale: u32,
+) -> Result<Vec<u8>, png::EncodingError> {
+    check_export_scale(export_scale);
+    let pond_size = koi_frame.pond_size();
+    let [export_width, export_height] =
+        [pond_size.width_pixels(), pond_size.height_pixels()].map(|side| side * export_scale);
     let native_pixels = koi_frame.as_rgba_bytes().as_chunks::<4>().0;
-    let mut export_pixels = vec![[0; 4]; (STATIC_WIDTH_PIXELS * STATIC_HEIGHT_PIXELS) as usize];
+    let mut export_pixels = vec![[0; 4]; (export_width * export_height) as usize];
     for (pixel_index, pixel_channels) in export_pixels.iter_mut().enumerate() {
-        let native_x = pixel_index as u32 % STATIC_WIDTH_PIXELS / STATIC_EXPORT_SCALE;
-        let native_y = pixel_index as u32 / STATIC_WIDTH_PIXELS / STATIC_EXPORT_SCALE;
-        *pixel_channels = native_pixels[(native_y * FRAME_WIDTH_PIXELS + native_x) as usize];
+        let native_x = pixel_index as u32 % export_width / export_scale;
+        let native_y = pixel_index as u32 / export_width / export_scale;
+        *pixel_channels = native_pixels[(native_y * pond_size.width_pixels() + native_x) as usize];
     }
     let mut png_bytes = Vec::new();
-    let mut png_encoder =
-        png::Encoder::new(&mut png_bytes, STATIC_WIDTH_PIXELS, STATIC_HEIGHT_PIXELS);
+    let mut png_encoder = png::Encoder::new(&mut png_bytes, export_width, export_height);
     png_encoder.set_color(png::ColorType::Rgba);
     png_encoder.set_depth(png::BitDepth::Eight);
     let mut png_writer = png_encoder.write_header()?;
@@ -48,16 +68,20 @@ pub fn encode_png(koi_frame: &KoiFrame) -> Result<Vec<u8>, png::EncodingError> {
 /// are omitted; visible pixels retain their color and alpha. Identical frames produce
 /// identical documents without I/O, timestamps, external assets, or input mutation.
 pub fn encode_svg(koi_frame: &KoiFrame) -> String {
+    let pond_size = koi_frame.pond_size();
+    let [native_width, native_height] = [pond_size.width_pixels(), pond_size.height_pixels()];
+    let [export_width, export_height] =
+        [native_width, native_height].map(|side| side * STATIC_EXPORT_SCALE);
     let mut svg_document = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{STATIC_WIDTH_PIXELS}\" height=\"{STATIC_HEIGHT_PIXELS}\" viewBox=\"0 0 {FRAME_WIDTH_PIXELS} {FRAME_HEIGHT_PIXELS}\" shape-rendering=\"crispEdges\">\n"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{export_width}\" height=\"{export_height}\" viewBox=\"0 0 {native_width} {native_height}\" shape-rendering=\"crispEdges\">\n"
     );
     let native_pixels = koi_frame.as_rgba_bytes().as_chunks::<4>().0;
     let mut pixel_index = 0;
     while pixel_index < native_pixels.len() {
         let pixel_channels = native_pixels[pixel_index];
-        let pixel_x = pixel_index % FRAME_WIDTH_PIXELS as usize;
-        let pixel_y = pixel_index / FRAME_WIDTH_PIXELS as usize;
-        let row_end_index = (pixel_y + 1) * FRAME_WIDTH_PIXELS as usize;
+        let pixel_x = pixel_index % native_width as usize;
+        let pixel_y = pixel_index / native_width as usize;
+        let row_end_index = (pixel_y + 1) * native_width as usize;
         let run_length_pixels = native_pixels[pixel_index..row_end_index]
             .iter()
             .take_while(|next_pixel| **next_pixel == pixel_channels)
@@ -99,65 +123,107 @@ const PREVIEW_PANELS: &str = r#"</h1></header>
 <section class="light">
 <h2>GitHub light</h2>
 <div class="images">
-<figure><img src="koi.gif" width="512" height="512" alt="The koi swimming"><figcaption>koi.gif</figcaption></figure>
-<figure><img src="koi.png" width="512" height="512" alt="The koi, still"><figcaption>koi.png</figcaption></figure>
+{FIGURES}
 </div>
 </section>
 <section class="dark">
 <h2>GitHub dark</h2>
 <div class="images">
-<figure><img src="koi.gif" width="512" height="512" alt="The koi swimming"><figcaption>koi.gif</figcaption></figure>
-<figure><img src="koi.png" width="512" height="512" alt="The koi, still"><figcaption>koi.png</figcaption></figure>
+{FIGURES}
 </div>
 </section>
 </body>
 </html>
 "#;
+/// The GIF and PNG figures each panel shows, at their export size.
+const PREVIEW_FIGURES: &str = r#"<figure><img src="koi.gif" width="{WIDTH}" height="{HEIGHT}" alt="The koi swimming"><figcaption>koi.gif</figcaption></figure>
+<figure><img src="koi.png" width="{WIDTH}" height="{HEIGHT}" alt="The koi, still"><figcaption>koi.png</figcaption></figure>"#;
 
 /// Build a page that previews `koi.gif` and `koi.png`, read from beside it, on GitHub's
 /// light and dark page colors under the given caption. It draws nothing itself and loads
 /// no scripts or outside files, so it shows exactly what was generated.
 pub fn encode_preview_html(caption: &str) -> String {
+    encode_sized_preview_html(caption, STATIC_WIDTH_PIXELS, STATIC_HEIGHT_PIXELS)
+}
+
+/// Build the preview page as `encode_preview_html` does, for images of the given export
+/// size; narrow windows shrink them to fit.
+pub fn encode_sized_preview_html(caption: &str, export_width: u32, export_height: u32) -> String {
     let escaped_caption = caption
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;");
-    format!("{PREVIEW_HEAD}{escaped_caption}{PREVIEW_PANELS}")
+    let figures = PREVIEW_FIGURES
+        .replace("{WIDTH}", &export_width.to_string())
+        .replace("{HEIGHT}", &export_height.to_string());
+    format!(
+        "{PREVIEW_HEAD}{escaped_caption}{}",
+        PREVIEW_PANELS.replace("{FIGURES}", &figures)
+    )
 }
 
 /// One GIF palette holds 256 entries, and one of them marks transparent pixels.
 const GIF_COLOR_LIMIT: usize = 255;
 const GIF_TRANSPARENT_INDEX: u8 = 0;
 
-/// Encode a seamless loop as an animated GIF at the static export size, repeating each
-/// native pixel in both dimensions. The GIF repeats forever at `FRAMES_PER_SECOND`; each
+/// Encode a seamless loop as an animated GIF at the static export size of its frames'
+/// pond, repeating each native pixel in both dimensions. The GIF repeats forever at `FRAMES_PER_SECOND`; each
 /// delay, in hundredths of a second, is the step in a rounded running total, so a loop
 /// lasts exactly its frame count divided by the frame rate. Each frame stores only the
 /// box around its drawn pixels, with an exact palette of its colors, and that box clears
 /// before the next frame. Colors are never approximated: a frame with more than 255
 /// colors or a partly transparent pixel fails instead. Identical frames produce
 /// identical bytes without I/O, timestamps, or input mutation.
+///
+/// # Panics
+///
+/// If the frames were drawn in ponds of different sizes.
 pub fn encode_gif(koi_frames: &[KoiFrame]) -> Result<Vec<u8>, GifEncodingError> {
-    if koi_frames.is_empty() {
+    encode_gif_scaled(koi_frames, STATIC_EXPORT_SCALE)
+}
+
+/// Encode a seamless loop as `encode_gif` does, at a whole-number scale from one
+/// through [`MAX_EXPORT_SCALE`]. A GIF's weight grows with its area and its frame
+/// count, and phones may not play a heavy one, so a scale of one suits large ponds.
+///
+/// # Panics
+///
+/// If the scale is outside that range, or the frames were drawn in ponds of different
+/// sizes.
+pub fn encode_gif_scaled(
+    koi_frames: &[KoiFrame],
+    export_scale: u32,
+) -> Result<Vec<u8>, GifEncodingError> {
+    check_export_scale(export_scale);
+    let Some(first_frame) = koi_frames.first() else {
         return Err(GifEncodingError::NoFrames);
-    }
+    };
+    let pond_size = first_frame.pond_size();
+    assert!(
+        koi_frames
+            .iter()
+            .all(|koi_frame| koi_frame.pond_size() == pond_size),
+        "every frame of a loop shares one pond"
+    );
+    let native_width = pond_size.width_pixels();
     let mut gif_encoder = gif::Encoder::new(
         Vec::new(),
-        STATIC_WIDTH_PIXELS as u16,
-        STATIC_HEIGHT_PIXELS as u16,
+        (native_width * export_scale) as u16,
+        (pond_size.height_pixels() * export_scale) as u16,
         &[],
     )?;
     gif_encoder.set_repeat(gif::Repeat::Infinite)?;
     for (frame_index, koi_frame) in koi_frames.iter().enumerate() {
         let native_pixels = koi_frame.as_rgba_bytes().as_chunks::<4>().0;
-        let [box_left, box_top, box_width, box_height] = find_drawn_box(native_pixels);
+        let [box_left, box_top, box_width, box_height] =
+            find_drawn_box(native_pixels, native_width);
         let mut palette_indices: BTreeMap<[u8; 3], u8> = BTreeMap::new();
         let mut palette_channels = vec![0; 3];
         let mut native_indices = Vec::with_capacity((box_width * box_height) as usize);
         for native_y in box_top..box_top + box_height {
             for native_x in box_left..box_left + box_width {
                 let [red, green, blue, alpha] =
-                    native_pixels[(native_y * FRAME_WIDTH_PIXELS + native_x) as usize];
+                    native_pixels[(native_y * native_width + native_x) as usize];
                 let palette_index = match alpha {
                     0 => GIF_TRANSPARENT_INDEX,
                     255 => match palette_indices.get(&[red, green, blue]) {
@@ -177,15 +243,16 @@ pub fn encode_gif(koi_frames: &[KoiFrame]) -> Result<Vec<u8>, GifEncodingError> 
                 native_indices.push(palette_index);
             }
         }
-        let mut export_indices = Vec::with_capacity(
-            native_indices.len() * (STATIC_EXPORT_SCALE * STATIC_EXPORT_SCALE) as usize,
-        );
+        let mut export_indices =
+            Vec::with_capacity(native_indices.len() * (export_scale * export_scale) as usize);
         for native_row in native_indices.chunks(box_width as usize) {
             let export_row: Vec<u8> = native_row
                 .iter()
-                .flat_map(|&palette_index| [palette_index; STATIC_EXPORT_SCALE as usize])
+                .flat_map(|&palette_index| {
+                    std::iter::repeat_n(palette_index, export_scale as usize)
+                })
                 .collect();
-            for _ in 0..STATIC_EXPORT_SCALE {
+            for _ in 0..export_scale {
                 export_indices.extend_from_slice(&export_row);
             }
         }
@@ -194,10 +261,10 @@ pub fn encode_gif(koi_frames: &[KoiFrame]) -> Result<Vec<u8>, GifEncodingError> 
                 - calculate_elapsed_hundredths(frame_index),
             dispose: gif::DisposalMethod::Background,
             transparent: Some(GIF_TRANSPARENT_INDEX),
-            left: (box_left * STATIC_EXPORT_SCALE) as u16,
-            top: (box_top * STATIC_EXPORT_SCALE) as u16,
-            width: (box_width * STATIC_EXPORT_SCALE) as u16,
-            height: (box_height * STATIC_EXPORT_SCALE) as u16,
+            left: (box_left * export_scale) as u16,
+            top: (box_top * export_scale) as u16,
+            width: (box_width * export_scale) as u16,
+            height: (box_height * export_scale) as u16,
             palette: Some(palette_channels),
             buffer: Cow::Owned(export_indices),
             ..gif::Frame::default()
@@ -208,14 +275,14 @@ pub fn encode_gif(koi_frames: &[KoiFrame]) -> Result<Vec<u8>, GifEncodingError> 
 
 /// The native box `[left, top, width, height]` around a frame's drawn pixels; a frame
 /// with none keeps one transparent pixel, since a GIF frame cannot be empty.
-fn find_drawn_box(native_pixels: &[[u8; 4]]) -> [u32; 4] {
+fn find_drawn_box(native_pixels: &[[u8; 4]], native_width: u32) -> [u32; 4] {
     let mut drawn_edges: Option<[u32; 4]> = None;
     for (pixel_index, pixel_channels) in native_pixels.iter().enumerate() {
         if pixel_channels[3] == 0 {
             continue;
         }
-        let pixel_x = pixel_index as u32 % FRAME_WIDTH_PIXELS;
-        let pixel_y = pixel_index as u32 / FRAME_WIDTH_PIXELS;
+        let pixel_x = pixel_index as u32 % native_width;
+        let pixel_y = pixel_index as u32 / native_width;
         let [left, top, right, bottom] =
             drawn_edges.get_or_insert([pixel_x, pixel_y, pixel_x, pixel_y]);
         *left = (*left).min(pixel_x);
@@ -226,6 +293,13 @@ fn find_drawn_box(native_pixels: &[[u8; 4]]) -> [u32; 4] {
     drawn_edges.map_or([0, 0, 1, 1], |[left, top, right, bottom]| {
         [left, top, right + 1 - left, bottom + 1 - top]
     })
+}
+
+fn check_export_scale(export_scale: u32) {
+    assert!(
+        (1..=MAX_EXPORT_SCALE).contains(&export_scale),
+        "export scales run from 1 through {MAX_EXPORT_SCALE}"
+    );
 }
 
 /// Hundredths of a second from the start of the loop to the given frame, rounded.

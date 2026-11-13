@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `git-koi render --size WIDTHxHEIGHT` draws the koi in a pond of any size, each
+  side from 256 through 4096 native pixels, and `--scale N` exports it at 1
+  through 4 pixels per native pixel instead of 2. In a pond that is not square
+  the koi swims a new track each day, an oval or a figure-eight swum either way
+  round, with loop-the-loops and S-wiggles; a longer track makes a longer loop
+  at the same pace. Without the options, every file is drawn exactly as before.
+  The Action takes them as the `size` and `scale` inputs, and the library as
+  `pond::PondSize`, `render::SwimLoop`, and the `_scaled` encoders.
+
 ## [1.0.2] - 2026-10-31
 
 ### Fixed
