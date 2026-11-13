@@ -11,12 +11,15 @@ use git_koi::coat::KoiBody;
 use git_koi::collect::{GhCli, collect_account_snapshot};
 use git_koi::history::AccountSnapshot;
 use git_koi::koi::derive_koi_development;
-use git_koi::motion::frame_count;
-use git_koi::output::{encode_gif, encode_png, encode_preview_html};
-use git_koi::render::{KoiFrame, render_koi, render_swim_frame};
+use git_koi::output::{
+    MAX_EXPORT_SCALE, STATIC_EXPORT_SCALE, encode_gif_scaled, encode_png_scaled,
+    encode_sized_preview_html,
+};
+use git_koi::pond::PondSize;
+use git_koi::render::{KoiFrame, SwimLoop, render_koi_in};
 
 const USAGE: &str = "Usage: git-koi collect LOGIN [--output FILE]
-       git-koi render SNAPSHOT --output-dir DIR [--body BODY]
+       git-koi render SNAPSHOT --output-dir DIR [--body BODY] [--size WxH] [--scale N]
        git-koi --help | --version
 Collect LOGIN's public GitHub snapshot as JSON through `gh api`: public owned and
 contributed repositories, and daily contributions from the account's creation
@@ -26,10 +29,16 @@ Requires an authenticated GitHub CLI; in GitHub Actions, set GH_TOKEN to github.
 Render a collected SNAPSHOT into DIR: koi.gif swims the behavior chosen for its
 observation date, koi.png is the still koi, and preview.html shows both on light and
 dark backgrounds. BODY is white (the default), black, asagi, tea, gold, or platinum.
-The files are replaced only after all of them render.
+The pond is 256x256 native pixels unless --size gives another, each side from 256
+through 4096; in a pond that is not square the koi swims a new track each day, and a
+longer track makes a longer loop. Each native pixel becomes N pixels on each side, 2
+unless --scale gives 1 through 4. A GIF's weight grows with its area and length, and
+phones may not play a heavy one: for a wide pond, try --size 768x256 --scale 1.
+The options may come in any order. The files are replaced only after all of them render.
 Errors go to stderr and exit 1; invalid usage exits 2.
 Examples: git-koi collect octocat --output snapshot.json
-          git-koi render snapshot.json --output-dir koi --body asagi";
+          git-koi render snapshot.json --output-dir koi --body asagi
+          git-koi render snapshot.json --output-dir koi --size 768x256 --scale 1";
 
 /// Each body's name on the command line.
 const BODY_NAMES: [(&str, KoiBody); 6] = [
@@ -60,32 +69,64 @@ fn main() -> ExitCode {
         [Some("collect"), Some(login), Some("--output"), _] if !login.starts_with('-') => {
             run_collect(login, Some(Path::new(&program_arguments[3])))
         }
-        [Some("render"), Some(snapshot_path), Some("--output-dir"), _]
-            if !snapshot_path.starts_with('-') =>
-        {
-            run_render(
-                Path::new(snapshot_path),
-                Path::new(&program_arguments[3]),
-                KoiBody::default(),
-            )
+        [Some("render"), Some(snapshot_path), ..] if !snapshot_path.starts_with('-') => {
+            match parse_render_options(&program_arguments[2..]) {
+                Some(render_options) => run_render(Path::new(snapshot_path), render_options),
+                None => exit_with_usage(),
+            }
         }
-        [
-            Some("render"),
-            Some(snapshot_path),
-            Some("--output-dir"),
-            _,
-            Some("--body"),
-            Some(body_name),
-        ] if !snapshot_path.starts_with('-') && parse_body(body_name).is_some() => run_render(
-            Path::new(snapshot_path),
-            Path::new(&program_arguments[3]),
-            parse_body(body_name).expect("the guard parsed the body"),
-        ),
-        _ => {
-            eprintln!("{USAGE}");
-            ExitCode::from(2)
+        _ => exit_with_usage(),
+    }
+}
+
+fn exit_with_usage() -> ExitCode {
+    eprintln!("{USAGE}");
+    ExitCode::from(2)
+}
+
+/// What `render` draws and where, from its options.
+struct RenderOptions<'a> {
+    output_directory: &'a Path,
+    koi_body: KoiBody,
+    pond_size: PondSize,
+    export_scale: u32,
+}
+
+/// Read `render`'s options, each a flag and its value, in any order and at most once;
+/// the output directory is required. Anything else is a usage error.
+fn parse_render_options(option_arguments: &[OsString]) -> Option<RenderOptions<'_>> {
+    let mut output_directory = None;
+    let mut koi_body = None;
+    let mut pond_size = None;
+    let mut export_scale = None;
+    let (option_pairs, []) = option_arguments.as_chunks::<2>() else {
+        return None;
+    };
+    for [flag, value] in option_pairs {
+        let value_text = value.to_str();
+        match flag.to_str()? {
+            "--output-dir" if output_directory.is_none() => {
+                output_directory = Some(Path::new(value));
+            }
+            "--body" if koi_body.is_none() => koi_body = Some(parse_body(value_text?)?),
+            "--size" if pond_size.is_none() => pond_size = Some(value_text?.parse().ok()?),
+            "--scale" if export_scale.is_none() => {
+                export_scale = Some(
+                    value_text?
+                        .parse()
+                        .ok()
+                        .filter(|scale| (1..=MAX_EXPORT_SCALE).contains(scale))?,
+                );
+            }
+            _ => return None,
         }
     }
+    Some(RenderOptions {
+        output_directory: output_directory?,
+        koi_body: koi_body.unwrap_or_default(),
+        pond_size: pond_size.unwrap_or_default(),
+        export_scale: export_scale.unwrap_or(STATIC_EXPORT_SCALE),
+    })
 }
 
 fn run_collect(login: &str, output_path: Option<&Path>) -> ExitCode {
@@ -105,8 +146,9 @@ fn run_collect(login: &str, output_path: Option<&Path>) -> ExitCode {
     }
 }
 
-fn run_render(snapshot_path: &Path, output_directory: &Path, koi_body: KoiBody) -> ExitCode {
-    let render_result = render_day(snapshot_path, koi_body).and_then(|rendered_day| {
+fn run_render(snapshot_path: &Path, render_options: RenderOptions) -> ExitCode {
+    let output_directory = render_options.output_directory;
+    let render_result = render_day(snapshot_path, &render_options).and_then(|rendered_day| {
         fs::create_dir_all(output_directory)
             .map_err(|create_error| format!("{}: {create_error}", output_directory.display()))?;
         let mut written_paths = Vec::new();
@@ -131,14 +173,21 @@ fn run_render(snapshot_path: &Path, output_directory: &Path, koi_body: KoiBody) 
     }
 }
 
-/// The day's files, by name, with a caption naming the behavior, observation date, and body.
+/// The day's files, by name, with a caption naming the behavior, observation date, body,
+/// and any pond that is not the default.
 struct RenderedDay {
     caption: String,
     output_files: [(&'static str, Vec<u8>); 3],
 }
 
 /// Render and encode the day's files in memory, so none is written unless all succeed.
-fn render_day(snapshot_path: &Path, koi_body: KoiBody) -> Result<RenderedDay, String> {
+fn render_day(snapshot_path: &Path, render_options: &RenderOptions) -> Result<RenderedDay, String> {
+    let RenderOptions {
+        koi_body,
+        pond_size,
+        export_scale,
+        ..
+    } = *render_options;
     let snapshot_json = fs::read_to_string(snapshot_path)
         .map_err(|read_error| format!("{}: {read_error}", snapshot_path.display()))?;
     let account_snapshot: AccountSnapshot = serde_json::from_str(&snapshot_json)
@@ -146,20 +195,31 @@ fn render_day(snapshot_path: &Path, koi_body: KoiBody) -> Result<RenderedDay, St
     let koi_development = derive_koi_development(&account_snapshot)
         .map_err(|development_error| development_error.to_string())?;
     let behavior = select_behavior(&koi_development);
-    let swim_frames: Vec<KoiFrame> = (0..frame_count(behavior))
-        .map(|frame_index| render_swim_frame(&koi_development, koi_body, behavior, frame_index))
+    let swim_loop = SwimLoop::new(&koi_development, koi_body, behavior, pond_size);
+    let swim_frames: Vec<KoiFrame> = (0..swim_loop.frame_count())
+        .map(|frame_index| swim_loop.render_frame(frame_index))
         .collect();
-    let gif_bytes =
-        encode_gif(&swim_frames).map_err(|encoding_error| encoding_error.to_string())?;
-    let png_bytes = encode_png(&render_koi(&koi_development, koi_body))
+    let gif_bytes = encode_gif_scaled(&swim_frames, export_scale)
         .map_err(|encoding_error| encoding_error.to_string())?;
-    let caption = format!(
+    let png_bytes = encode_png_scaled(
+        &render_koi_in(pond_size, &koi_development, koi_body),
+        export_scale,
+    )
+    .map_err(|encoding_error| encoding_error.to_string())?;
+    let mut caption = format!(
         "{} for {}, {} body",
         describe_behavior(behavior),
         koi_development.observed_on,
         name_body(koi_body)
     );
-    let preview_html = encode_preview_html(&caption);
+    if pond_size != PondSize::default() {
+        caption.push_str(&format!(", {pond_size} pond"));
+    }
+    let preview_html = encode_sized_preview_html(
+        &caption,
+        pond_size.width_pixels() * export_scale,
+        pond_size.height_pixels() * export_scale,
+    );
     Ok(RenderedDay {
         caption,
         output_files: [

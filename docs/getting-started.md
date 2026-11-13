@@ -34,6 +34,8 @@ when it changed, so an unchanged koi adds no commit.
 | ------------ | -------------------- | --------------------------------------------------------- |
 | `login`      | The repository owner | Account whose koi to draw                                 |
 | `body`       | `white`              | `white`, `black`, `asagi`, `tea`, `gold`, or `platinum`   |
+| `size`       | `256x256`            | Pond size in native pixels, as `WIDTHxHEIGHT`             |
+| `scale`      | `2`                  | Export pixels per native pixel, `1` through `4`           |
 | `output-dir` | `koi`                | Folder that receives `koi.gif`, `koi.png`, `preview.html` |
 | `token`      | The built-in token   | Token for reading the account's public data               |
 
@@ -42,6 +44,31 @@ runs the workflow and redraws the koi. If you change `output-dir`, change the
 commit step's path and the README image to match. The example uses
 `yalongwastaken/git-koi@v1`, which moves to each compatible release; pin a full
 release tag to choose when you update.
+
+### A Wider Pond
+
+A koi can swim the whole width of a README. Give the workflow's `git-koi` step a
+pond that is not square, and show the GIF at full width:
+
+```yaml
+with:
+  body: asagi
+  size: 768x256
+  scale: 1
+```
+
+```html
+<img src="koi/koi.gif" width="100%" alt="My koi" />
+```
+
+In a square pond the koi circles the center. In any other it swims a track drawn
+for the day along the pond's long side: an oval or a figure-eight, swum either
+way round, with loop-the-loops and S-wiggles that curl either way. A longer
+track makes a longer loop at the same pace, eight seconds per lap of about 600
+native pixels. A GIF's weight grows with its area and its length, and GitHub's
+mobile app may not play a heavy one, so a wide pond is best exported at
+`scale: 1`; the README stretches it to fit. Each side runs from 256 through 4096
+native pixels.
 
 GitHub pauses scheduled workflows in a public repository after 60 days without
 activity such as a push. A koi that stops changing during a long quiet stretch
@@ -75,7 +102,10 @@ git-koi render snapshot.json --output-dir koi --body asagi
 
 Open `koi/preview.html` in a browser to see the GIF and the still on GitHub's
 light and dark page colors. `--body` takes `white`, the default, `black`,
-`asagi`, `tea`, `gold`, or `platinum`.
+`asagi`, `tea`, `gold`, or `platinum`. `--size` takes a pond as `WIDTHxHEIGHT`
+in native pixels, `256x256` by default, and `--scale` the export pixels per
+native pixel, `1` through `4`, `2` by default; [A Wider Pond](#a-wider-pond)
+describes both. The options may come in any order.
 
 `collect` reads only public data: the account's public repositories, the public
 repositories it has contributed to, GitHub's color for each language, and its
@@ -122,6 +152,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+For a pond of another size, prepare the loop once with `render::SwimLoop::new`,
+passing a `pond::PondSize`, then render each of its `frame_count()` frames with
+`render_frame`, the still with `render::render_koi_in`, and encode them with
+`output::encode_gif_scaled` and `output::encode_png_scaled`.
 
 To collect in-process instead of reading a file, call
 `collect::collect_account_snapshot` with `collect::GhCli` and today's UTC date.

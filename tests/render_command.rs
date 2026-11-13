@@ -8,8 +8,9 @@ use git_koi::coat::KoiBody;
 use git_koi::history::{AccountSnapshot, ContributionDay};
 use git_koi::koi::{KoiDevelopment, derive_koi_development};
 use git_koi::motion::frame_count;
-use git_koi::output::{encode_gif, encode_png};
-use git_koi::render::{KoiFrame, render_koi, render_swim_frame};
+use git_koi::output::{encode_gif, encode_gif_scaled, encode_png, encode_png_scaled};
+use git_koi::pond::PondSize;
+use git_koi::render::{KoiFrame, SwimLoop, render_koi, render_koi_in, render_swim_frame};
 
 const HISTORY_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -101,6 +102,51 @@ fn the_body_option_redraws_the_koi_in_that_body() {
 }
 
 #[test]
+fn the_size_and_scale_options_draw_the_days_pond_in_any_order() {
+    let output_directory = fresh_directory("render-pond");
+    let command_output = run_git_koi(&[
+        "render",
+        HISTORY_FIXTURE,
+        "--scale",
+        "1",
+        "--body",
+        "asagi",
+        "--size",
+        "300x256",
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        command_output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&command_output.stderr)
+    );
+    let koi_development = read_fixture_development();
+    let behavior = select_behavior(&koi_development);
+    let pond_size: PondSize = "300x256".parse().unwrap();
+    let swim_loop = SwimLoop::new(&koi_development, KoiBody::Asagi, behavior, pond_size);
+    let swim_frames: Vec<KoiFrame> = (0..swim_loop.frame_count())
+        .map(|frame_index| swim_loop.render_frame(frame_index))
+        .collect();
+    assert_eq!(
+        fs::read(output_directory.join("koi.gif")).unwrap(),
+        encode_gif_scaled(&swim_frames, 1).unwrap()
+    );
+    assert_eq!(
+        fs::read(output_directory.join("koi.png")).unwrap(),
+        encode_png_scaled(
+            &render_koi_in(pond_size, &koi_development, KoiBody::Asagi),
+            1
+        )
+        .unwrap()
+    );
+    let preview_html = fs::read_to_string(output_directory.join("preview.html")).unwrap();
+    assert!(preview_html.contains(r#"width="300" height="256""#));
+    assert!(String::from_utf8_lossy(&command_output.stdout).contains("asagi body, 300x256 pond"));
+}
+
+#[test]
 fn a_failed_render_exits_one_and_keeps_the_previous_files() {
     let output_directory = fresh_directory("render-failure");
     for file_name in ["koi.gif", "koi.png", "preview.html"] {
@@ -140,6 +186,50 @@ fn render_usage_errors_exit_two_and_help_exits_zero() {
             "--body",
             "red",
         ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--size",
+            "100x100",
+        ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--size",
+            "wide",
+        ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--scale",
+            "0",
+        ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--scale",
+            "5",
+        ],
+        &["render", HISTORY_FIXTURE, "--output-dir", "koi", "--size"],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--body",
+            "white",
+            "--body",
+            "black",
+        ],
+        &["render", HISTORY_FIXTURE, "--body", "white"],
     ] {
         let command_output = run_git_koi(invalid_arguments);
         assert_eq!(
