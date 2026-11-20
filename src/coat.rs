@@ -169,7 +169,8 @@ const STEEL_RAMP: [[u8; 4]; 4] = [
 const WHITE_PATCH_SCORE: f64 = 0.5;
 /// Share of the patch span that pigments cover together, divided by their shares.
 const PATCH_COVERAGE: f64 = 0.58;
-const PATCH_SPAN: Range<f64> = 0.02..0.86;
+/// Organic patches reach the nose; only the tail end is left unpatched.
+const PATCH_SPAN: Range<f64> = 0.0..0.86;
 /// Patches move this far from organic shapes toward the top pigment's variety layout.
 const VARIETY_PULL: f64 = 0.25;
 // The variety layout votes with a hard step, so it carries little weight against the
@@ -699,12 +700,12 @@ fn calculate_pigment_development(pigment: Pigment, color_fraction: f64) -> f64 {
 /// A grid over the patch span, weighted by half width so each sample stands for its
 /// share of body area.
 fn sample_body(calculate_half_width: impl Fn(f64) -> f64) -> Vec<BodySample> {
-    const ALONG_STEPS: usize = 170;
     const ALONG_STEP_FRACTION: f64 = 0.005;
     const LATERAL_STEPS: usize = 41;
     const LATERAL_STEP_FRACTION: f64 = 0.05;
-    let mut body_samples = Vec::with_capacity(ALONG_STEPS * LATERAL_STEPS);
-    for along_step in 0..ALONG_STEPS {
+    let along_steps = ((PATCH_SPAN.end - PATCH_SPAN.start) / ALONG_STEP_FRACTION).round() as usize;
+    let mut body_samples = Vec::with_capacity(along_steps * LATERAL_STEPS);
+    for along_step in 0..along_steps {
         let along_fraction = PATCH_SPAN.start + along_step as f64 * ALONG_STEP_FRACTION;
         let area_weight = calculate_half_width(along_fraction);
         for lateral_step in 0..LATERAL_STEPS {
@@ -915,4 +916,49 @@ fn hash_lattice_point(identity_seed: u64, lattice_x: i64, lattice_y: i64) -> f64
     hash_bits = (hash_bits ^ (hash_bits >> 27)).wrapping_mul(0x94d049bb133111eb);
     hash_bits ^= hash_bits >> 31;
     (hash_bits >> 11) as f64 / (1_u64 << 53) as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history::AccountSnapshot;
+    use crate::koi::derive_koi_development;
+
+    #[test]
+    fn organic_patches_can_reach_the_tip_of_the_nose_on_every_body() {
+        let snapshot: AccountSnapshot =
+            serde_json::from_str(include_str!("../tests/fixtures/account-with-history.json"))
+                .unwrap();
+        let mut development = derive_koi_development(&snapshot).unwrap();
+        for koi_body in [
+            KoiBody::White,
+            KoiBody::Black,
+            KoiBody::Asagi,
+            KoiBody::Tea,
+            KoiBody::Gold,
+            KoiBody::Platinum,
+        ] {
+            for language_color in ["#f34b7d", "#3572a5"] {
+                development.language_shares = [("language".to_owned(), 1.0)].into();
+                development.language_colors = [(
+                    "language".to_owned(),
+                    Some(language_color.try_into().unwrap()),
+                )]
+                .into();
+                // Accounts may have plain noses, but there must be no blanket
+                // exclusion of the snout for either red or blue patches.
+                for along_fraction in [0.0, 0.01] {
+                    let has_pigment = (0..32).any(|identity_seed| {
+                        development.identity_seed = identity_seed;
+                        let koi_coat = KoiCoat::new(&development, koi_body, |_| 1.0);
+                        koi_coat.select_body_pigment(along_fraction, 0.0).is_some()
+                    });
+                    assert!(
+                        has_pigment,
+                        "{koi_body:?}, {language_color}, nose position {along_fraction}"
+                    );
+                }
+            }
+        }
+    }
 }
