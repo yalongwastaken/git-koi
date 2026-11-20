@@ -175,6 +175,8 @@ const VARIETY_PULL: f64 = 0.25;
 // The variety layout votes with a hard step, so it carries little weight against the
 // smooth patch scores.
 const VARIETY_VOTE_WEIGHT: f64 = 0.16 * VARIETY_PULL;
+/// Shared end of the Asagi's plain head, measured from the nose.
+const ASAGI_HEAD_FRACTION: f64 = 0.11;
 const SPOT_SPAN: Range<f64> = 0.12..0.8;
 const SPOT_LATERAL_LIMIT: f64 = 0.8;
 /// The full variety layout tints 40% of each fin; the pull shortens the tint with it.
@@ -388,7 +390,6 @@ impl KoiCoat {
         half_width_pixels: f64,
         dither_threshold: f64,
     ) -> CoatPaint {
-        const ASAGI_HEAD_FRACTION: f64 = 0.11;
         let is_on_net = || {
             is_on_scale_net(
                 along_fraction,
@@ -514,6 +515,8 @@ impl KoiCoat {
         {
             return false;
         }
+        // Glints use a finer overlay than the outline net below: small highlights
+        // are scattered independently of the larger, continuous scale outlines.
         let scale_row = (lateral_fraction + 1.0) * half_width_pixels / 2.0;
         let scale_column =
             along_fraction * body_length_pixels / 2.4 + scale_row.floor().rem_euclid(2.0) * 0.5;
@@ -599,7 +602,7 @@ impl KoiCoat {
                     ) > 0.5)
                     .then_some(Pigment::Sumi)
             }
-            Pigment::Ai if along_fraction < 0.11 => None,
+            Pigment::Ai if along_fraction < ASAGI_HEAD_FRACTION => None,
             Pigment::Ai if lateral_fraction.abs() > 0.64 => {
                 secondary_pigment.filter(|_| has_asagi_sides)
             }
@@ -869,6 +872,8 @@ fn is_on_scale_net(
     body_length_pixels: f64,
     half_width_pixels: f64,
 ) -> bool {
+    // Larger cells than the independent gin-rin highlights: these form the
+    // continuous outline net, rather than isolated flecks of reflected light.
     let scale_row = (lateral_fraction + 1.0) * half_width_pixels / 2.4;
     let scale_column =
         along_fraction * body_length_pixels / 2.8 + scale_row.floor().rem_euclid(2.0) * 0.5;

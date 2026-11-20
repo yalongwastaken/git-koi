@@ -436,6 +436,9 @@ fn paint_feeding(
 ) {
     const RING_COUNT: usize = 3;
     const RING_WIDTH_PER_BODY_LENGTH: f64 = 0.3;
+    const RING_START_WIDTH_FRACTION: f64 = 0.25;
+    const RING_WIDTH_GROWTH_FRACTION: f64 = 0.6;
+    const RING_MAX_WIDTH_FRACTION: f64 = RING_START_WIDTH_FRACTION + RING_WIDTH_GROWTH_FRACTION;
     const RING_HEIGHT_PER_WIDTH: f64 = 0.4;
     const RING_ANGLE_STEP_RADIANS: f64 = 0.035;
     const PELLET_COUNT: usize = 5;
@@ -474,7 +477,8 @@ fn paint_feeding(
             rgba_pixels[pixel_index] = color;
         }
     };
-    let largest_ring_width = koi_anatomy.body_length_pixels * RING_WIDTH_PER_BODY_LENGTH * 0.85;
+    let largest_ring_width =
+        koi_anatomy.body_length_pixels * RING_WIDTH_PER_BODY_LENGTH * RING_MAX_WIDTH_FRACTION;
     let ring_scale = 1.0_f64
         .min(room[0] / largest_ring_width)
         .min(room[1] / (largest_ring_width * RING_HEIGHT_PER_WIDTH));
@@ -483,7 +487,7 @@ fn paint_feeding(
         let ring_width = ring_scale
             * koi_anatomy.body_length_pixels
             * RING_WIDTH_PER_BODY_LENGTH
-            * (0.25 + 0.6 * ring_phase);
+            * (RING_START_WIDTH_FRACTION + RING_WIDTH_GROWTH_FRACTION * ring_phase);
         let ring_color = WHITE_RAMP[if ring_index % 2 == 1 { 2 } else { 1 }];
         let mut ring_angle: f64 = 0.0;
         while ring_angle < TAU {
