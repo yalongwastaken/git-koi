@@ -434,17 +434,6 @@ fn paint_feeding(
     pose_center: [f64; 2],
     feeding_phase: f64,
 ) {
-    const RING_COUNT: usize = 3;
-    const RING_WIDTH_PER_BODY_LENGTH: f64 = 0.3;
-    const RING_HEIGHT_PER_WIDTH: f64 = 0.4;
-    const RING_ANGLE_STEP_RADIANS: f64 = 0.035;
-    const PELLET_COUNT: usize = 5;
-    const PELLET_NEAREST_PIXELS: f64 = 4.0;
-    const PELLET_REACH_PIXELS: f64 = 14.0;
-    const PELLET_WANDER_PIXELS: f64 = 9.0;
-    // Pellets vanish just before they reach the mouth.
-    const PELLET_EATEN_LIFE: f64 = 0.92;
-    const PELLET_COLORS: [[u8; 4]; 2] = [[228, 166, 114, 255], [184, 111, 80, 255]];
     // A clear pixel between the extras and the frame edge, plus rounding.
     const EDGE_MARGIN_PIXELS: f64 = 2.0;
     let frame_sizes = [
@@ -474,14 +463,42 @@ fn paint_feeding(
             rgba_pixels[pixel_index] = color;
         }
     };
-    let largest_ring_width = koi_anatomy.body_length_pixels * RING_WIDTH_PER_BODY_LENGTH * 0.85;
+    paint_feeding_rings(
+        mouth,
+        room,
+        koi_anatomy.body_length_pixels,
+        feeding_phase,
+        &mut paint_water,
+    );
+    paint_feeding_pellets(
+        mouth,
+        room,
+        forward_direction,
+        feeding_phase,
+        &mut paint_water,
+    );
+}
+
+/// Expanding ripple rings, scaled to the space around the mouth.
+fn paint_feeding_rings(
+    mouth: [f64; 2],
+    room: [f64; 2],
+    body_length_pixels: f64,
+    feeding_phase: f64,
+    paint_water: &mut impl FnMut([f64; 2], [u8; 4], f64),
+) {
+    const RING_COUNT: usize = 3;
+    const RING_WIDTH_PER_BODY_LENGTH: f64 = 0.3;
+    const RING_HEIGHT_PER_WIDTH: f64 = 0.4;
+    const RING_ANGLE_STEP_RADIANS: f64 = 0.035;
+    let largest_ring_width = body_length_pixels * RING_WIDTH_PER_BODY_LENGTH * 0.85;
     let ring_scale = 1.0_f64
         .min(room[0] / largest_ring_width)
         .min(room[1] / (largest_ring_width * RING_HEIGHT_PER_WIDTH));
     for ring_index in 0..RING_COUNT {
         let ring_phase = (feeding_phase + ring_index as f64 / RING_COUNT as f64).fract();
         let ring_width = ring_scale
-            * koi_anatomy.body_length_pixels
+            * body_length_pixels
             * RING_WIDTH_PER_BODY_LENGTH
             * (0.25 + 0.6 * ring_phase);
         let ring_color = WHITE_RAMP[if ring_index % 2 == 1 { 2 } else { 1 }];
@@ -498,6 +515,23 @@ fn paint_feeding(
             ring_angle += RING_ANGLE_STEP_RADIANS;
         }
     }
+}
+
+/// Food pellets drift toward the mouth and vanish before reaching it.
+fn paint_feeding_pellets(
+    mouth: [f64; 2],
+    room: [f64; 2],
+    forward_direction: [f64; 2],
+    feeding_phase: f64,
+    paint_water: &mut impl FnMut([f64; 2], [u8; 4], f64),
+) {
+    const PELLET_COUNT: usize = 5;
+    const PELLET_NEAREST_PIXELS: f64 = 4.0;
+    const PELLET_REACH_PIXELS: f64 = 14.0;
+    const PELLET_WANDER_PIXELS: f64 = 9.0;
+    // Pellets vanish just before they reach the mouth.
+    const PELLET_EATEN_LIFE: f64 = 0.92;
+    const PELLET_COLORS: [[u8; 4]; 2] = [[228, 166, 114, 255], [184, 111, 80, 255]];
     // The second pellet pixel sits one to the right, so leave it room too.
     let farthest_pellet_pixels = PELLET_NEAREST_PIXELS + PELLET_REACH_PIXELS + PELLET_WANDER_PIXELS;
     let pellet_scale = 1.0_f64.min((room[0].min(room[1]) - 1.0).max(0.0) / farthest_pellet_pixels);
