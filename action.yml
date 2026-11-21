@@ -10,6 +10,10 @@ inputs:
   login:
     description: Account whose koi to draw.
     default: ${{ github.repository_owner }}
+  logins:
+    description: Newline-separated list of GitHub account logins for a multi-koi pond. When set, overrides `login`.
+    required: false
+    default: ''
   body:
     description: Body color, one of white, black, asagi, tea, gold, or platinum.
     default: white
@@ -80,13 +84,33 @@ runs:
           *) tar -xzf "$archive" ;;
         esac
         echo "$install_dir/git-koi-$version-$target" >> "$GITHUB_PATH"
-    - name: Collect the account snapshot
+    - name: Collect account snapshots
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
         KOI_LOGIN: ${{ inputs.login }}
-      run:
-        git-koi collect "$KOI_LOGIN" --output "$RUNNER_TEMP/koi-snapshot.json"
+        KOI_LOGINS: ${{ inputs.logins }}
+      run: |
+        # Determine which logins to collect: use logins if set, otherwise use login
+        if [ -z "$KOI_LOGINS" ]; then
+          logins="$KOI_LOGIN"
+        else
+          logins="$KOI_LOGINS"
+        fi
+
+        # Collect a snapshot for each login
+        snapshots_dir="$RUNNER_TEMP/koi-snapshots"
+        mkdir -p "$snapshots_dir"
+
+        while IFS= read -r login; do
+          # Skip empty lines
+          [ -z "$login" ] && continue
+          echo "Collecting snapshot for $login..."
+          git-koi collect "$login" --output "$snapshots_dir/$login.json"
+        done <<< "$logins"
+
+        # Store snapshots directory for the render step
+        echo "KOIS_SNAPSHOTS_DIR=$snapshots_dir" >> "$GITHUB_ENV"
     - name: Render the koi
       shell: bash
       env:
@@ -94,7 +118,19 @@ runs:
         KOI_SIZE: ${{ inputs.size }}
         KOI_SCALE: ${{ inputs.scale }}
         KOI_OUTPUT_DIR: ${{ inputs.output-dir }}
-      run:
-        git-koi render "$RUNNER_TEMP/koi-snapshot.json" --output-dir
-        "$KOI_OUTPUT_DIR" --body "$KOI_BODY" --size "$KOI_SIZE" --scale
-        "$KOI_SCALE"
+        KOI_LOGINS: ${{ inputs.logins }}
+      run: |
+        # Determine if rendering single or multi-koi
+        if [ -z "$KOI_LOGINS" ]; then
+          # Single koi: use render with --body option
+          snapshot="$RUNNER_TEMP/koi-snapshots"/*
+          git-koi render "$snapshot" --output-dir "$KOI_OUTPUT_DIR" --body "$KOI_BODY" --size "$KOI_SIZE" --scale "$KOI_SCALE"
+        else
+          # Multi-koi: use render-multi without --body (all use default body)
+          snapshots=()
+          while IFS= read -r login; do
+            [ -z "$login" ] && continue
+            snapshots+=("$RUNNER_TEMP/koi-snapshots/$login.json")
+          done <<< "$KOI_LOGINS"
+          git-koi render-multi "${snapshots[@]}" --output-dir "$KOI_OUTPUT_DIR" --size "$KOI_SIZE" --scale "$KOI_SCALE"
+        fi

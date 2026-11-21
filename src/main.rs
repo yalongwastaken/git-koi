@@ -11,6 +11,7 @@ use git_koi::coat::KoiBody;
 use git_koi::collect::{GhCli, collect_account_snapshot};
 use git_koi::history::AccountSnapshot;
 use git_koi::koi::derive_koi_development;
+use git_koi::multi_koi::{KoiInstance, MultiKoiScene};
 use git_koi::output::{
     ExportScale, encode_gif_scaled, encode_png_scaled, encode_sized_preview_html,
 };
@@ -24,6 +25,7 @@ fn build_usage_text() -> String {
     format!(
         "Usage: git-koi collect LOGIN [--output FILE]
        git-koi render SNAPSHOT --output-dir DIR [--body BODY] [--size WxH] [--scale N]
+       git-koi render-multi SNAPSHOT1 [SNAPSHOT2 ...] --output-dir DIR [--size WxH] [--scale N]
        git-koi --help | --version
 Collect LOGIN's public GitHub snapshot as JSON through `gh api`: public owned and
 contributed repositories, and daily contributions from the account's creation
@@ -33,6 +35,8 @@ Requires an authenticated GitHub CLI; in GitHub Actions, set GH_TOKEN to github.
 Render a collected SNAPSHOT into DIR: koi.gif swims the behavior chosen for its
 observation date, koi.png is the still koi, and preview.html shows both on light and
 dark backgrounds. BODY is {body_names}.
+Render multiple collected SNAPSHOTs into DIR: koi.gif swims all koi in one pond, and
+koi.png is the still of the first koi. All koi use the default body.
 The pond is {default_pond_size} native pixels unless --size gives another, each side at least
 {min_side_pixels} and its area at most {max_area_pixels} pixels, as in {max_side_pixels}x{min_side_pixels}; in a pond that is not
 square the koi swims a new track each day, and a longer track makes a longer loop. Each
@@ -43,7 +47,8 @@ The options may come in any order. The files are replaced only after all of them
 Render prints nothing on success; errors go to stderr and exit 1; invalid usage exits 2.
 Examples: git-koi collect octocat --output snapshot.json
           git-koi render snapshot.json --output-dir koi --body asagi
-          git-koi render snapshot.json --output-dir koi --size 768x256 --scale 1",
+          git-koi render snapshot.json --output-dir koi --size 768x256 --scale 1
+          git-koi render-multi snap1.json snap2.json --output-dir multi-koi",
         default_pond_size = PondSize::default(),
         min_side_pixels = PondSize::MIN_SIDE_PIXELS,
         max_side_pixels = PondSize::MAX_SIDE_PIXELS,
@@ -89,7 +94,7 @@ fn main() -> ExitCode {
         .map(|argument| argument.to_str())
         .collect();
     match argument_texts.as_slice() {
-        [Some("--help")] | [Some("collect" | "render"), Some("--help")] => {
+        [Some("--help")] | [Some("collect" | "render" | "render-multi"), Some("--help")] => {
             println!("{}", build_usage_text());
             ExitCode::SUCCESS
         }
@@ -104,6 +109,19 @@ fn main() -> ExitCode {
         [Some("render"), Some(snapshot_path), ..] if !snapshot_path.starts_with('-') => {
             match parse_render_options(&program_arguments[2..]) {
                 Some(render_options) => run_render(Path::new(snapshot_path), render_options),
+                None => exit_with_usage(),
+            }
+        }
+        [Some("render-multi"), Some(first_snapshot), ..] if !first_snapshot.starts_with('-') => {
+            let all_after_subcmd = &program_arguments[1..];
+            let snapshot_count = all_after_subcmd
+                .iter()
+                .take_while(|arg| !arg.to_str().is_some_and(|s| s.starts_with('-')))
+                .count();
+            let (snapshot_args, flag_args) = all_after_subcmd.split_at(snapshot_count);
+            let snapshot_paths: Vec<&Path> = snapshot_args.iter().map(Path::new).collect();
+            match parse_render_multi_options(flag_args) {
+                Some(multi_options) => run_render_multi(&snapshot_paths, multi_options),
                 None => exit_with_usage(),
             }
         }
@@ -152,6 +170,104 @@ fn parse_render_options(option_arguments: &[OsString]) -> Option<RenderOptions<'
         pond_size: pond_size.unwrap_or_default(),
         export_scale: export_scale.unwrap_or_default(),
     })
+}
+
+/// What `render-multi` draws and where, from its options.
+struct RenderMultiOptions<'a> {
+    output_directory: &'a Path,
+    pond_size: PondSize,
+    export_scale: ExportScale,
+}
+
+/// Read `render-multi`'s options, each a flag and its value, in any order and at most once;
+/// the output directory is required. Snapshots have already been extracted. Anything else
+/// is a usage error.
+fn parse_render_multi_options(option_arguments: &[OsString]) -> Option<RenderMultiOptions<'_>> {
+    let mut output_directory = None;
+    let mut pond_size = None;
+    let mut export_scale = None;
+    let (option_pairs, []) = option_arguments.as_chunks::<2>() else {
+        return None;
+    };
+    for [flag, value] in option_pairs {
+        let value_text = value.to_str();
+        match flag.to_str()? {
+            "--output-dir" if output_directory.is_none() => {
+                output_directory = Some(Path::new(value));
+            }
+            "--size" if pond_size.is_none() => pond_size = Some(value_text?.parse().ok()?),
+            "--scale" if export_scale.is_none() => export_scale = Some(value_text?.parse().ok()?),
+            _ => return None,
+        }
+    }
+    Some(RenderMultiOptions {
+        output_directory: output_directory?,
+        pond_size: pond_size.unwrap_or_default(),
+        export_scale: export_scale.unwrap_or_default(),
+    })
+}
+
+fn run_render_multi(snapshot_paths: &[&Path], multi_options: RenderMultiOptions) -> ExitCode {
+    let output_directory = multi_options.output_directory;
+    let render_result = render_multi_day(snapshot_paths, &multi_options).and_then(|output_files| {
+        fs::create_dir_all(output_directory)
+            .map_err(|create_error| format!("{}: {create_error}", output_directory.display()))?;
+        for (file_name, file_bytes) in output_files {
+            replace_file(&output_directory.join(file_name), &file_bytes)?;
+        }
+        Ok(())
+    });
+    match render_result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error_message) => {
+            eprintln!("git-koi: {error_message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Render and encode multi-koi output files in memory, by name, so none is written
+/// unless all succeed. The GIF has all koi composited into one pond; the PNG is a
+/// still of the first koi using the default body.
+fn render_multi_day(
+    snapshot_paths: &[&Path],
+    multi_options: &RenderMultiOptions,
+) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+    let RenderMultiOptions {
+        pond_size,
+        export_scale,
+        ..
+    } = *multi_options;
+    let koi_developments: Vec<_> = snapshot_paths
+        .iter()
+        .map(|snapshot_path| {
+            let snapshot_json = fs::read_to_string(snapshot_path)
+                .map_err(|read_error| format!("{}: {read_error}", snapshot_path.display()))?;
+            let account_snapshot: AccountSnapshot = serde_json::from_str(&snapshot_json)
+                .map_err(|parse_error| format!("{}: {parse_error}", snapshot_path.display()))?;
+            derive_koi_development(&account_snapshot)
+                .map_err(|development_error| development_error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let koi_instances: Vec<KoiInstance<'_>> = koi_developments
+        .iter()
+        .map(|dev| KoiInstance::new(dev, KoiBody::default(), pond_size))
+        .collect();
+    let scene = MultiKoiScene::new(koi_instances, pond_size);
+    let scene_frames: Vec<KoiFrame> = (0..scene.frame_count())
+        .map(|frame_index| scene.render_frame(frame_index))
+        .collect();
+    let gif_bytes = encode_gif_scaled(&scene_frames, export_scale)
+        .map_err(|encoding_error| encoding_error.to_string())?;
+    let first_dev = koi_developments
+        .first()
+        .ok_or_else(|| "no snapshots provided".to_string())?;
+    let png_bytes = encode_png_scaled(
+        &render_koi_in(pond_size, first_dev, KoiBody::default()),
+        export_scale,
+    )
+    .map_err(|encoding_error| encoding_error.to_string())?;
+    Ok(vec![("koi.gif", gif_bytes), ("koi.png", png_bytes)])
 }
 
 fn run_collect(login: &str, output_path: Option<&Path>) -> ExitCode {
