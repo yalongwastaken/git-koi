@@ -61,7 +61,8 @@ impl<'a> KoiInstance<'a> {
     /// Maps the scene index via `scene_frame_index % self.frame_count()` so the
     /// koi loops continuously regardless of how long the scene runs.
     pub fn render_frame(&self, scene_frame_index: u32) -> KoiFrame {
-        self.swim_loop.render_frame(scene_frame_index % self.frame_count())
+        self.swim_loop
+            .render_frame(scene_frame_index % self.frame_count())
     }
 }
 

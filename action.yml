@@ -10,6 +10,10 @@ inputs:
   login:
     description: Account whose koi to draw.
     default: ${{ github.repository_owner }}
+  logins:
+    description: Newline-separated list of GitHub account logins for a multi-koi pond. When set, overrides `login`.
+    required: false
+    default: ''
   body:
     description: Body color, one of white, black, asagi, tea, gold, or platinum.
     default: white
