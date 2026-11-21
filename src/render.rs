@@ -64,6 +64,40 @@ impl KoiFrame {
             rgba_pixels,
         }
     }
+
+    #[allow(dead_code)]
+    /// Merge multiple per-koi frames into one using front-to-back painter's algorithm.
+    ///
+    /// Empty slice returns a default-sized all-transparent frame. Otherwise, uses the first
+    /// frame's pond size for the result, then composites each frame front-to-back (first frame
+    /// on top). A pixel from a later frame only appears where no earlier frame had content.
+    pub(crate) fn composite(frames: &[&KoiFrame]) -> KoiFrame {
+        if frames.is_empty() {
+            let pond_size = PondSize::default();
+            let rgba_pixels = vec![[0; 4]; pond_size.pixel_count()];
+            return KoiFrame {
+                pond_size,
+                rgba_pixels,
+            };
+        }
+
+        let pond_size = frames[0].pond_size;
+        let mut result_pixels = vec![[0; 4]; pond_size.pixel_count()];
+
+        for frame in frames {
+            for (pixel_index, koi_pixel) in frame.rgba_pixels.iter().enumerate() {
+                // Only copy if: koi pixel is opaque AND result pixel is transparent
+                if koi_pixel[3] != 0 && result_pixels[pixel_index][3] == 0 {
+                    result_pixels[pixel_index] = *koi_pixel;
+                }
+            }
+        }
+
+        KoiFrame {
+            pond_size,
+            rgba_pixels: result_pixels,
+        }
+    }
 }
 
 /// Render the koi in a centered, fixed swimming pose, colored from its languages on
@@ -1397,5 +1431,38 @@ mod tests {
         let half_open = count_painted(&paint_mouth_alone(KoiBody::White, 0.5));
         let wide_open = count_painted(&paint_mouth_alone(KoiBody::White, 1.0));
         assert!(0 < half_open && half_open < wide_open);
+    }
+
+    #[test]
+    fn composite_of_no_frames_returns_transparent_default_pond() {
+        let result = KoiFrame::composite(&[]);
+        assert_eq!(result.pond_size(), PondSize::default());
+        // All pixels should be transparent
+        assert!(result.rgba_pixels.iter().all(|pixel| pixel == &[0; 4]));
+    }
+
+    #[test]
+    fn composite_places_front_koi_on_top() {
+        // Create frame A: pixel 0 = red opaque, pixel 1 = transparent
+        let frame_a = KoiFrame::from_rgba_pixels(vec![
+            [255, 0, 0, 255], // pixel 0: red opaque
+            [0, 0, 0, 0],     // pixel 1: transparent
+            [0, 0, 0, 0],     // padding
+        ]);
+
+        // Create frame B: pixel 0 = blue opaque, pixel 1 = green opaque
+        let frame_b = KoiFrame::from_rgba_pixels(vec![
+            [0, 0, 255, 255], // pixel 0: blue opaque
+            [0, 255, 0, 255], // pixel 1: green opaque
+            [0, 0, 0, 0],     // padding
+        ]);
+
+        let result = KoiFrame::composite(&[&frame_a, &frame_b]);
+
+        // Result pixel 0 should be red (from frame A, which is front)
+        assert_eq!(result.rgba_pixels[0], [255, 0, 0, 255]);
+
+        // Result pixel 1 should be green (from frame B, since frame A had it transparent)
+        assert_eq!(result.rgba_pixels[1], [0, 255, 0, 255]);
     }
 }
