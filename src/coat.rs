@@ -262,10 +262,6 @@ impl KoiBody {
         BACK_GLOW * (1.0 - lateral_fraction.abs()) + band_brightness
     }
 
-    /// The body's version of a pigment: black turns white on black, blue turns white on
-    /// Asagi, yellow turns platinum on gold and gold on platinum, and tea draws every
-    /// pigment in earthy tones. Black and Asagi also brighten yellow, and black turns
-    /// blue sky blue.
     fn select_pigment_ramp(self, pigment: Pigment) -> &'static [[u8; 4]] {
         match (self, pigment) {
             (Self::Black, Pigment::Sumi) | (Self::Asagi, Pigment::Ai) => &WHITE_RAMP,
@@ -309,13 +305,6 @@ enum Pigment {
 }
 
 /// A koi's language pigments laid out on one body shape.
-///
-/// Languages on the same pigment add their shares. Organic patches give each pigment
-/// body area in proportion to its share, pulled toward the top pigment's classic
-/// variety layout. The second pigment adds spots, or Asagi sides under blue; the third
-/// tints the fin roots. Young koi show pigments pale until FULL_COLOR_CONTRIBUTIONS:
-/// red, orange, yellow, and blue come in first, and black last. Streak marks color
-/// the fins and change only the language colors.
 pub(crate) struct KoiCoat {
     identity_seed: u64,
     koi_body: KoiBody,
