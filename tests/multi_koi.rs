@@ -70,7 +70,11 @@ fn two_koi_scene_frame_count_is_lcm_capped() {
         KoiInstance::new_with_behavior(&koi_development, koi_body, Behavior::DeepRest, pond_size);
 
     // Confirm each koi carries the frame count we expect from the behavior constants.
-    assert_eq!(rest_instance.frame_count(), 90, "Rest should loop in 90 frames");
+    assert_eq!(
+        rest_instance.frame_count(),
+        90,
+        "Rest should loop in 90 frames"
+    );
     assert_eq!(
         deep_rest_instance.frame_count(),
         120,
