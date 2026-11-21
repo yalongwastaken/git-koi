@@ -116,11 +116,10 @@ fn main() -> ExitCode {
             let all_after_subcmd = &program_arguments[1..];
             let snapshot_count = all_after_subcmd
                 .iter()
-                .take_while(|arg| !arg.to_str().map_or(false, |s| s.starts_with('-')))
+                .take_while(|arg| !arg.to_str().is_some_and(|s| s.starts_with('-')))
                 .count();
             let (snapshot_args, flag_args) = all_after_subcmd.split_at(snapshot_count);
-            let snapshot_paths: Vec<&Path> =
-                snapshot_args.iter().map(|a| Path::new(a)).collect();
+            let snapshot_paths: Vec<&Path> = snapshot_args.iter().map(Path::new).collect();
             match parse_render_multi_options(flag_args) {
                 Some(multi_options) => run_render_multi(&snapshot_paths, multi_options),
                 None => exit_with_usage(),
@@ -197,9 +196,7 @@ fn parse_render_multi_options(option_arguments: &[OsString]) -> Option<RenderMul
                 output_directory = Some(Path::new(value));
             }
             "--size" if pond_size.is_none() => pond_size = Some(value_text?.parse().ok()?),
-            "--scale" if export_scale.is_none() => {
-                export_scale = Some(value_text?.parse().ok()?)
-            }
+            "--scale" if export_scale.is_none() => export_scale = Some(value_text?.parse().ok()?),
             _ => return None,
         }
     }
@@ -212,16 +209,14 @@ fn parse_render_multi_options(option_arguments: &[OsString]) -> Option<RenderMul
 
 fn run_render_multi(snapshot_paths: &[&Path], multi_options: RenderMultiOptions) -> ExitCode {
     let output_directory = multi_options.output_directory;
-    let render_result =
-        render_multi_day(snapshot_paths, &multi_options).and_then(|output_files| {
-            fs::create_dir_all(output_directory).map_err(|create_error| {
-                format!("{}: {create_error}", output_directory.display())
-            })?;
-            for (file_name, file_bytes) in output_files {
-                replace_file(&output_directory.join(file_name), &file_bytes)?;
-            }
-            Ok(())
-        });
+    let render_result = render_multi_day(snapshot_paths, &multi_options).and_then(|output_files| {
+        fs::create_dir_all(output_directory)
+            .map_err(|create_error| format!("{}: {create_error}", output_directory.display()))?;
+        for (file_name, file_bytes) in output_files {
+            replace_file(&output_directory.join(file_name), &file_bytes)?;
+        }
+        Ok(())
+    });
     match render_result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error_message) => {
