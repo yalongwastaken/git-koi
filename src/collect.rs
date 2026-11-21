@@ -76,9 +76,11 @@ const CALENDAR_QUERY: &str = "query($login: String!, $from: DateTime!, $to: Date
 /// requests end the day before and a run just after midnight observes the day that just
 /// ended. Within that bound the observation date comes from GitHub. An account created
 /// today has no complete day yet and gets an empty history observed through yesterday.
-/// The snapshot is checked against the history rules before it is returned, so a gap,
-/// a conflict, or a calendar that starts after the account was created fails instead of
-/// producing a partial snapshot.
+/// The snapshot is checked against the history rules before it is returned, so a gap
+/// before the latest day GitHub reports, a conflict, or a calendar that starts after the
+/// account was created fails instead of producing a partial snapshot. The observation
+/// date is that latest reported day (yesterday at most), so days GitHub left out at the
+/// end of the history are not caught: a snapshot that stops early passes the checks.
 pub fn collect_account_snapshot(
     github: &impl GraphqlClient,
     login: &str,
@@ -272,7 +274,9 @@ fn collect_contribution_history(
 /// covers, leaving out the earliest, so while the window's first day is missing the days
 /// before the earliest one reported are requested again. Each request ends before the
 /// previous one, so this stops. A request that returns no days stops it with the window
-/// incomplete, and the checks on the whole history report the missing days.
+/// incomplete. The checks on the whole history report the missing days that fall before
+/// the latest day GitHub reports; they cannot see days missing after it, because that day
+/// sets the observation date.
 fn collect_calendar_window(
     github: &impl GraphqlClient,
     login: &str,
