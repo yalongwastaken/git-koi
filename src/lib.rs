@@ -27,6 +27,7 @@ pub mod history;
 pub mod koi;
 pub mod markings;
 pub mod motion;
+pub mod multi_koi;
 pub mod output;
 pub mod pond;
 pub mod render;
