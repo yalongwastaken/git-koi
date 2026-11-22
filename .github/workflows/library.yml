@@ -18,7 +18,7 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
       - name: Generate library
-        run: cargo +stable run --locked --example generate-library -- library
+        run: cargo +stable run --release --locked --example generate-library -- library
       - name: Attach library
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

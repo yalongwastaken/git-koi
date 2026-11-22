@@ -100,7 +100,7 @@ const USAGE: &str = "Usage: generate-library OUTPUT_DIRECTORY
 Write reproducible PNGs, SVGs, and an index; replace matching files, preserve others.
 Success is silent. Errors go to stderr and exit 1; invalid usage exits 2.
 An interrupted run may leave a partial library; rerun the same command to repair it.
-Example: cargo run --offline --locked --example generate-library -- library";
+Example: cargo run --release --offline --locked --example generate-library -- library";
 
 fn main() -> ExitCode {
     let program_arguments: Vec<_> = env::args_os().skip(1).collect();

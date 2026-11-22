@@ -55,7 +55,7 @@ ignores the generated files, and CI attaches a fresh library to every pull
 request as the `koi-library` artifact.
 
 ```sh
-cargo run --locked --example generate-library -- library
+cargo run --release --locked --example generate-library -- library
 ```
 
 When a change alters how the koi looks, copy `library/bodies-light.png` and
