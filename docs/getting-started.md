@@ -53,13 +53,15 @@ The example uses `yalongwastaken/git-koi@v1`. Each way of referencing the Action
 fixes something different:
 
 - `@v1` runs whichever release `v1` points to, and it moves to each compatible
-  release.
-- A full release tag such as `@v1.0.2` chooses when you update, but anyone who
-  can push to this repository can move a tag, so it does not fix what runs.
-- A full commit hash fixes `action.yml` and the version it downloads. The binary
-  still comes from that version's GitHub Release, and the checksum the Action
-  checks it against comes from the same release, so a binary replaced together
-  with its checksum would still pass.
+  release. Only the repository's admin can move it.
+- A full release tag such as `@v1.1.0` chooses when you update. Releases from
+  1.1.0 on are immutable, so their tags cannot move.
+- A full commit hash fixes `action.yml` and the version it downloads.
+
+Whichever you choose, from 1.1.0 on the Action runs a binary only if GitHub's
+attestation shows this repository's release workflow built it from the version's
+tag, so a binary uploaded by hand, or replaced together with its checksum,
+fails.
 
 ### A Wider Pond
 

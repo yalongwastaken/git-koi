@@ -28,3 +28,9 @@ the token bounds what a compromised release could do. The default, the
 workflow's built-in token, reaches only the calling repository, for one job,
 with the workflow's permissions. A personal access token would hand over
 everything it can reach, so keep the default.
+
+From 1.1.0, releases are immutable and the Action runs a binary only after
+GitHub's attestation shows this repository's release workflow built it from the
+version's tag. Only the repository's admin can create or move `v*` tags, and the
+crate is published to crates.io only from the `release` environment, which
+admits version tags alone and needs the admin's approval.
