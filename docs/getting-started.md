@@ -34,14 +34,57 @@ when it changed, so an unchanged koi adds no commit.
 | ------------ | -------------------- | --------------------------------------------------------- |
 | `login`      | The repository owner | Account whose koi to draw                                 |
 | `body`       | `white`              | `white`, `black`, `asagi`, `tea`, `gold`, or `platinum`   |
+| `size`       | `256x256`            | Pond size in native pixels, as `WIDTHxHEIGHT`             |
+| `scale`      | `2`                  | Export pixels per native pixel, `1` through `4`           |
 | `output-dir` | `koi`                | Folder that receives `koi.gif`, `koi.png`, `preview.html` |
-| `token`      | The built-in token   | Token for reading the account's public data               |
+| `token`      | The built-in token   | Token for reading public data; keep the default           |
 
 To change the body, edit `body` in your copy of the workflow; pushing the change
 runs the workflow and redraws the koi. If you change `output-dir`, change the
-commit step's path and the README image to match. The example uses
-`yalongwastaken/git-koi@v1`, which moves to each compatible release; pin a full
-release tag to choose when you update.
+commit step's path and the README image to match.
+
+Keep `token` at its default. The Action's process holds whatever token the
+workflow passes it, so the token bounds what a compromised release could do. The
+built-in token reaches only the profile repository, for one job, with the
+workflow's permissions; a personal access token would hand over everything it
+can reach.
+
+The example uses `yalongwastaken/git-koi@v1`. Each way of referencing the Action
+fixes something different:
+
+- `@v1` runs whichever release `v1` points to, and it moves to each compatible
+  release.
+- A full release tag such as `@v1.0.2` chooses when you update, but anyone who
+  can push to this repository can move a tag, so it does not fix what runs.
+- A full commit hash fixes `action.yml` and the version it downloads. The binary
+  still comes from that version's GitHub Release, and the checksum the Action
+  checks it against comes from the same release, so a binary replaced together
+  with its checksum would still pass.
+
+### A Wider Pond
+
+A koi can swim the whole width of a README. Give the workflow's `git-koi` step a
+pond that is not square, and show the GIF at full width:
+
+```yaml
+with:
+  body: asagi
+  size: 768x256
+  scale: 1
+```
+
+```html
+<img src="koi/koi.gif" width="100%" alt="My koi" />
+```
+
+In a square pond the koi circles the center. In any other it swims a track drawn
+for the day along the pond's long side: an oval or a figure-eight, swum either
+way round, with loop-the-loops and S-wiggles that curl either way. A longer
+track makes a longer loop at the same pace, eight seconds per lap of about 600
+native pixels. A GIF's weight grows with its area and its length, and GitHub's
+mobile app may not play a heavy one, so a wide pond is best exported at
+`scale: 1`; the README stretches it to fit. Each side is at least 256 native
+pixels, and the area at most 2048 by 256.
 
 GitHub pauses scheduled workflows in a public repository after 60 days without
 activity such as a push. A koi that stops changing during a long quiet stretch
@@ -75,7 +118,10 @@ git-koi render snapshot.json --output-dir koi --body asagi
 
 Open `koi/preview.html` in a browser to see the GIF and the still on GitHub's
 light and dark page colors. `--body` takes `white`, the default, `black`,
-`asagi`, `tea`, `gold`, or `platinum`.
+`asagi`, `tea`, `gold`, or `platinum`. `--size` takes a pond as `WIDTHxHEIGHT`
+in native pixels, `256x256` by default, and `--scale` the export pixels per
+native pixel, `1` through `4`, `2` by default; [A Wider Pond](#a-wider-pond)
+describes both. The options may come in any order.
 
 `collect` reads only public data: the account's public repositories, the public
 repositories it has contributed to, GitHub's color for each language, and its
@@ -84,8 +130,9 @@ day. It writes the snapshot to standard output, or with `--output` replaces the
 file only after collection succeeds. In GitHub Actions, `GH_TOKEN` set to the
 workflow's token is enough. `render` draws everything in memory first and
 replaces each file through a temporary file, so a failed run keeps the previous
-files. Both print errors to standard error and exit 1; invalid usage exits 2.
-`git-koi --help` prints the full usage and `git-koi --version` the version.
+files; a run that succeeds prints nothing. Both print errors to standard error
+and exit 1; invalid usage exits 2. `git-koi --help` prints the full usage and
+`git-koi --version` the version.
 
 ## As a Library
 
@@ -122,6 +169,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+For a pond of another size, prepare the loop once with `render::SwimLoop::new`,
+passing a `pond::PondSize`, then render each of its `frame_count()` frames with
+`render_frame`, the still with `render::render_koi_in`, and encode them with
+`output::encode_gif_scaled` and `output::encode_png_scaled` at an
+`output::ExportScale`.
 
 To collect in-process instead of reading a file, call
 `collect::collect_account_snapshot` with `collect::GhCli` and today's UTC date.

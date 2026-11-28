@@ -25,3 +25,16 @@ jobs:
           name: koi-library
           path: library/
           if-no-files-found: error
+      # After the library is attached, so a failure still offers the sheets to copy.
+      - name: Check the README's render sheets against the library
+        run: |
+          any_sheet_stale=false
+          for sheet_name in bodies-light.png bodies-dark.png; do
+            if ! cmp -s "library/$sheet_name" "docs/$sheet_name"; then
+              echo "::error file=docs/$sheet_name::docs/$sheet_name does not match the generated library; copy library/$sheet_name into docs/"
+              any_sheet_stale=true
+            fi
+          done
+          if [ "$any_sheet_stale" = true ]; then
+            exit 1
+          fi

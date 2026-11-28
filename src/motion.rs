@@ -122,8 +122,10 @@ const DART_STYLE: LapStyle = LapStyle {
 /// Where the koi swims in a frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Course {
-    /// Clockwise around the frame center. The head's angle is measured clockwise on
-    /// screen from the right; loops start with the head at the top.
+    /// Clockwise around the frame center, or along the pond's track in a pond that is
+    /// not square. The head's angle is measured clockwise on screen from the right, a
+    /// full turn per lap; loops start with the head at the top, or where the track
+    /// starts.
     Lap {
         /// Where the head is on the lap.
         angle_radians: f64,
@@ -191,9 +193,21 @@ pub(crate) const STILL_POSE: SwimPose = SwimPose {
 
 /// Frames in a behavior's loop at FRAMES_PER_SECOND.
 pub fn frame_count(behavior: Behavior) -> u32 {
+    stretched_frame_count(behavior, 1)
+}
+
+/// Frames in a behavior's loop when each lap lasts `lap_stretch` times as long, for a
+/// pond whose lap is that many times longer; behaviors that never lap ignore it. A
+/// stretch of one is [`frame_count`].
+///
+/// # Panics
+///
+/// If `lap_stretch` is zero.
+pub fn stretched_frame_count(behavior: Behavior, lap_stretch: u32) -> u32 {
+    assert!(lap_stretch > 0, "a lap lasts at least one loop");
     match behavior {
-        Behavior::Cruise => CRUISE_STYLE.loop_frame_count,
-        Behavior::Dart => DART_STYLE.loop_frame_count,
+        Behavior::Cruise => CRUISE_STYLE.loop_frame_count * lap_stretch,
+        Behavior::Dart => DART_STYLE.loop_frame_count * lap_stretch,
         Behavior::Rest | Behavior::SurfaceFeeding => REST_FRAME_COUNT,
         Behavior::DeepRest => DEEP_REST_FRAME_COUNT,
     }
@@ -214,12 +228,31 @@ pub fn frame_count(behavior: Behavior) -> u32 {
 /// sway. The mouth breathes while the koi laps, gulps while it rests or feeds, and
 /// takes one slow gulp with deep rest's fin flick.
 pub fn calculate_swim_pose(behavior: Behavior, frame_index: u32) -> SwimPose {
-    let loop_frame_count = frame_count(behavior);
+    calculate_stretched_swim_pose(behavior, frame_index, 1)
+}
+
+/// The pose for a frame of a behavior's loop when each lap lasts `lap_stretch` times
+/// as long, as [`stretched_frame_count`] counts it. The laps cover the same share of
+/// the course per loop, and the strokes, waves, sculls, and breaths keep their pace, so
+/// the stretched loop holds that many times as many of each and still closes
+/// seamlessly. Behaviors that never lap ignore the stretch, and a stretch of one is
+/// [`calculate_swim_pose`].
+///
+/// # Panics
+///
+/// If `lap_stretch` is zero.
+pub fn calculate_stretched_swim_pose(
+    behavior: Behavior,
+    frame_index: u32,
+    lap_stretch: u32,
+) -> SwimPose {
+    let loop_frame_count = stretched_frame_count(behavior, lap_stretch);
     let loop_frame = frame_index % loop_frame_count;
-    let drive = calculate_drive(behavior, loop_frame);
+    let drive = calculate_drive(behavior, loop_frame, lap_stretch);
     let trailing_drive = calculate_drive(
         behavior,
         (loop_frame + loop_frame_count - SIDE_FIN_TRAIL_FRAMES) % loop_frame_count,
+        lap_stretch,
     );
     let tail_bend = TAIL_BEND_PER_WAVE_STRENGTH
         * drive.wave_strength
@@ -273,10 +306,10 @@ impl Drive {
     }
 }
 
-fn calculate_drive(behavior: Behavior, loop_frame: u32) -> Drive {
+fn calculate_drive(behavior: Behavior, loop_frame: u32, lap_stretch: u32) -> Drive {
     match behavior {
-        Behavior::Cruise => CRUISE_STYLE.calculate_drive(loop_frame),
-        Behavior::Dart => DART_STYLE.calculate_drive(loop_frame),
+        Behavior::Cruise => CRUISE_STYLE.calculate_drive(loop_frame, lap_stretch),
+        Behavior::Dart => DART_STYLE.calculate_drive(loop_frame, lap_stretch),
         Behavior::Rest => calculate_rest_drive(loop_frame, REST_DEPTH),
         Behavior::SurfaceFeeding => Drive {
             feeding_phase: Some(
@@ -398,8 +431,9 @@ impl LapStyle {
         calculate_beat(frame, self.stroke_frame_count, self.stroke_share)
     }
 
-    fn calculate_drive(&self, loop_frame: u32) -> Drive {
-        let lap_speeds: Vec<f64> = (0..self.loop_frame_count)
+    fn calculate_drive(&self, loop_frame: u32, lap_stretch: u32) -> Drive {
+        let loop_frame_count = self.loop_frame_count * lap_stretch;
+        let lap_speeds: Vec<f64> = (0..loop_frame_count)
             .map(|speed_frame| {
                 self.glide_speed
                     + self.stroke_speed_gain
@@ -414,7 +448,8 @@ impl LapStyle {
             STILL_POSE.wave_phase_radians + frame * TAU / self.wave_frame_count;
         let scull = self.scull_swing_radians
             * (TAU * frame / self.scull_frame_count + self.scull_phase_radians).sin();
-        let breath = (TAU * BREATHS_PER_LOOP * frame / f64::from(self.loop_frame_count))
+        let breaths = BREATHS_PER_LOOP * f64::from(lap_stretch);
+        let breath = (TAU * breaths * frame / f64::from(loop_frame_count))
             .sin()
             .max(0.0);
         Drive {

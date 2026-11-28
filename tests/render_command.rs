@@ -8,8 +8,9 @@ use git_koi::coat::KoiBody;
 use git_koi::history::{AccountSnapshot, ContributionDay};
 use git_koi::koi::{KoiDevelopment, derive_koi_development};
 use git_koi::motion::frame_count;
-use git_koi::output::{encode_gif, encode_png};
-use git_koi::render::{KoiFrame, render_koi, render_swim_frame};
+use git_koi::output::{ExportScale, encode_gif, encode_gif_scaled, encode_png, encode_png_scaled};
+use git_koi::pond::PondSize;
+use git_koi::render::{KoiFrame, SwimLoop, render_koi, render_koi_in, render_swim_frame};
 
 const HISTORY_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -69,10 +70,8 @@ fn render_writes_the_days_loop_still_and_preview_as_the_renderer_draws_them() {
     assert!(preview_html.contains(r#"src="koi.gif""#));
     assert!(preview_html.contains(r#"src="koi.png""#));
     assert!(!preview_html.contains("<script"));
-    let summary_line = String::from_utf8_lossy(&command_output.stdout);
-    let observation_date = koi_development.observed_on.to_string();
-    assert!(summary_line.contains(&observation_date));
-    assert!(preview_html.contains(&observation_date));
+    assert!(preview_html.contains(&koi_development.observed_on.to_string()));
+    assert!(command_output.stdout.is_empty());
 }
 
 #[test]
@@ -97,7 +96,53 @@ fn the_body_option_redraws_the_koi_in_that_body() {
         fs::read(output_directory.join("koi.png")).unwrap(),
         black_png
     );
-    assert!(String::from_utf8_lossy(&command_output.stdout).contains("black body"));
+    let preview_html = fs::read_to_string(output_directory.join("preview.html")).unwrap();
+    assert!(preview_html.contains("black body"));
+}
+
+#[test]
+fn the_size_and_scale_options_draw_the_days_pond_in_any_order() {
+    let output_directory = fresh_directory("render-pond");
+    let command_output = run_git_koi(&[
+        "render",
+        HISTORY_FIXTURE,
+        "--scale",
+        "1",
+        "--body",
+        "asagi",
+        "--size",
+        "300x256",
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        command_output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&command_output.stderr)
+    );
+    let koi_development = read_fixture_development();
+    let behavior = select_behavior(&koi_development);
+    let pond_size: PondSize = "300x256".parse().unwrap();
+    let swim_loop = SwimLoop::new(&koi_development, KoiBody::Asagi, behavior, pond_size);
+    let swim_frames: Vec<KoiFrame> = (0..swim_loop.frame_count())
+        .map(|frame_index| swim_loop.render_frame(frame_index))
+        .collect();
+    assert_eq!(
+        fs::read(output_directory.join("koi.gif")).unwrap(),
+        encode_gif_scaled(&swim_frames, ExportScale::new(1).unwrap()).unwrap()
+    );
+    assert_eq!(
+        fs::read(output_directory.join("koi.png")).unwrap(),
+        encode_png_scaled(
+            &render_koi_in(pond_size, &koi_development, KoiBody::Asagi),
+            ExportScale::new(1).unwrap()
+        )
+        .unwrap()
+    );
+    let preview_html = fs::read_to_string(output_directory.join("preview.html")).unwrap();
+    assert!(preview_html.contains(r#"width="300" height="256""#));
+    assert!(preview_html.contains("asagi body, 300x256 pond"));
 }
 
 #[test]
@@ -140,6 +185,50 @@ fn render_usage_errors_exit_two_and_help_exits_zero() {
             "--body",
             "red",
         ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--size",
+            "100x100",
+        ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--size",
+            "wide",
+        ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--scale",
+            "0",
+        ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--scale",
+            "5",
+        ],
+        &["render", HISTORY_FIXTURE, "--output-dir", "koi", "--size"],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            "koi",
+            "--body",
+            "white",
+            "--body",
+            "black",
+        ],
+        &["render", HISTORY_FIXTURE, "--body", "white"],
     ] {
         let command_output = run_git_koi(invalid_arguments);
         assert_eq!(

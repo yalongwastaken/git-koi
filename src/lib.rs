@@ -11,8 +11,8 @@
 //!    [`motion`] gives the pose for each frame of the behavior's loop.
 //! 5. [`markings`] measures how strongly the streaks show, and [`coat`] names the bodies
 //!    the koi can wear and colors it from its languages.
-//! 6. [`render`] draws a [`render::KoiFrame`], still or swimming, and [`output`] encodes
-//!    it as PNG, SVG, or a looping GIF, with a preview page.
+//! 6. [`render`] draws a [`render::KoiFrame`], still or swimming, in a [`pond`] of any
+//!    size, and [`output`] encodes it as PNG, SVG, or a looping GIF, with a preview page.
 //!
 //! Everything after collection is deterministic: it reads no clock, performs no I/O, and
 //! mutates no input. Callers own files and publication. The `git-koi` command composes
@@ -28,4 +28,5 @@ pub mod koi;
 pub mod markings;
 pub mod motion;
 pub mod output;
+pub mod pond;
 pub mod render;

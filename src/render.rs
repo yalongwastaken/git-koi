@@ -12,8 +12,9 @@
 //! maximum form keeps its anatomy at higher totals. Quiet days alone do not change the
 //! base anatomy. The pose and framing account for the body and fins.
 //!
-//! Every growth level shares one square native canvas of [`FRAME_WIDTH_PIXELS`] by
-//! [`FRAME_HEIGHT_PIXELS`], which the encoders in [`crate::output`] scale up exactly.
+//! Every growth level shares one native canvas the size of the [`crate::pond::PondSize`]:
+//! by default the square [`FRAME_WIDTH_PIXELS`] by [`FRAME_HEIGHT_PIXELS`], which the
+//! encoders in [`crate::output`] scale up exactly. Laps follow the [`crate::pond`]'s lap.
 //! Anatomical proportions live here; pigments, bodies, and palettes in [`crate::coat`];
 //! streak mark strengths in [`crate::markings`]; poses in [`crate::motion`].
 
@@ -24,16 +25,21 @@ use crate::coat::{KoiBody, KoiCoat, WHITE_RAMP};
 use crate::koi::{
     ADULT_CONTRIBUTIONS, KoiDevelopment, YOUNG_SHAPE_CONTRIBUTIONS, calculate_growth_fraction,
 };
-use crate::motion::{Course, STILL_POSE, SwimPose, calculate_swim_pose, frame_count};
+use crate::motion::{
+    Course, STILL_POSE, SwimPose, calculate_stretched_swim_pose, calculate_swim_pose, frame_count,
+    stretched_frame_count,
+};
+use crate::pond::{Lap, PondSize};
 
-/// Width of the native canvas every koi is drawn on, at every growth level.
+/// Width of the default pond's native canvas, at every growth level.
 pub const FRAME_WIDTH_PIXELS: u32 = 256;
-/// Height of the native canvas; the canvas is square.
+/// Height of the default pond's native canvas; the default pond is square.
 pub const FRAME_HEIGHT_PIXELS: u32 = FRAME_WIDTH_PIXELS;
 
-/// A renderer-owned, fixed-size frame with row-major RGBA pixels.
+/// A renderer-owned frame the size of its pond, with row-major RGBA pixels.
 #[derive(Debug, Eq, PartialEq)]
 pub struct KoiFrame {
+    pond_size: PondSize,
     rgba_pixels: Vec<[u8; 4]>,
 }
 
@@ -44,10 +50,19 @@ impl KoiFrame {
         self.rgba_pixels.as_flattened()
     }
 
-    /// Build a frame from chosen pixels, for encoder tests that need colors no koi has.
+    /// The size of the pond the frame was drawn in, which is the frame's size.
+    pub fn pond_size(&self) -> PondSize {
+        self.pond_size
+    }
+
+    /// Build a default-size frame from chosen pixels, for encoder tests that need colors
+    /// no koi has.
     #[cfg(test)]
     pub(crate) fn from_rgba_pixels(rgba_pixels: Vec<[u8; 4]>) -> Self {
-        Self { rgba_pixels }
+        Self {
+            pond_size: PondSize::default(),
+            rgba_pixels,
+        }
     }
 }
 
@@ -58,13 +73,24 @@ impl KoiFrame {
 /// observation date. Identical inputs produce identical pixels without I/O, clock
 /// reads, or input mutation.
 pub fn render_koi(koi_development: &KoiDevelopment, koi_body: KoiBody) -> KoiFrame {
+    render_koi_in(PondSize::default(), koi_development, koi_body)
+}
+
+/// Render the koi as `render_koi` does, centered in a pond of the given size.
+pub fn render_koi_in(
+    pond_size: PondSize,
+    koi_development: &KoiDevelopment,
+    koi_body: KoiBody,
+) -> KoiFrame {
     let koi_anatomy = calculate_anatomy(koi_development.total_contributions);
     render_pose(
+        pond_size,
         koi_development,
         koi_body,
         &koi_anatomy,
         &STILL_POSE,
         Framing::CenterOnKoi,
+        None,
     )
 }
 
@@ -82,25 +108,78 @@ pub fn render_swim_frame(
     behavior: Behavior,
     frame_index: u32,
 ) -> KoiFrame {
-    let koi_anatomy = calculate_anatomy(koi_development.total_contributions);
-    let swim_pose = calculate_swim_pose(behavior, frame_index);
-    let pose_center = match swim_pose.course {
-        Course::Lap { .. } => [0.0, 0.0],
-        Course::Hover { drift_pixels, .. } => {
-            let hover_fit = fit_hover_loop(behavior, &koi_anatomy);
-            [0, 1].map(|axis_index| {
+    SwimLoop::new(koi_development, koi_body, behavior, PondSize::default())
+        .render_frame(frame_index)
+}
+
+/// A behavior's seamless loop in a pond of any size, colored like `render_koi`. In the
+/// default pond it draws exactly what `render_swim_frame` draws. In a pond that is not
+/// square, laps follow the day's track instead of a circle, and a longer track makes a
+/// longer loop, as [`crate::pond`] describes. The lap and any hover framing are worked
+/// out once, so drawing a whole loop through one `SwimLoop` is faster than calling
+/// `render_swim_frame` for each frame.
+pub struct SwimLoop<'a> {
+    koi_development: &'a KoiDevelopment,
+    koi_body: KoiBody,
+    behavior: Behavior,
+    pond_size: PondSize,
+    koi_anatomy: KoiAnatomy,
+    lap: Lap,
+    hover_fit: Option<HoverFit>,
+}
+
+impl<'a> SwimLoop<'a> {
+    /// Prepare the day's loop of a behavior in a pond of the given size.
+    pub fn new(
+        koi_development: &'a KoiDevelopment,
+        koi_body: KoiBody,
+        behavior: Behavior,
+        pond_size: PondSize,
+    ) -> Self {
+        let koi_anatomy = calculate_anatomy(koi_development.total_contributions);
+        let lap = Lap::for_day(koi_development, pond_size, koi_anatomy.body_length_pixels);
+        let hover_fit = match calculate_swim_pose(behavior, 0).course {
+            Course::Lap { .. } => None,
+            Course::Hover { .. } => Some(fit_hover_loop(pond_size, behavior, &koi_anatomy)),
+        };
+        Self {
+            koi_development,
+            koi_body,
+            behavior,
+            pond_size,
+            koi_anatomy,
+            lap,
+            hover_fit,
+        }
+    }
+
+    /// Frames in the loop; frame numbers wrap around it.
+    pub fn frame_count(&self) -> u32 {
+        stretched_frame_count(self.behavior, self.lap.stretch())
+    }
+
+    /// Render one frame of the loop. Identical inputs produce identical pixels without
+    /// I/O, clock reads, or input mutation.
+    pub fn render_frame(&self, frame_index: u32) -> KoiFrame {
+        let swim_pose =
+            calculate_stretched_swim_pose(self.behavior, frame_index, self.lap.stretch());
+        let pose_center = match (swim_pose.course, &self.hover_fit) {
+            (Course::Hover { drift_pixels, .. }, Some(hover_fit)) => [0, 1].map(|axis_index| {
                 hover_fit.sweep_center[axis_index]
                     - hover_fit.drift_scales[axis_index] * drift_pixels[axis_index]
-            })
-        }
-    };
-    render_pose(
-        koi_development,
-        koi_body,
-        &koi_anatomy,
-        &swim_pose,
-        Framing::At(pose_center),
-    )
+            }),
+            _ => [0.0, 0.0],
+        };
+        render_pose(
+            self.pond_size,
+            self.koi_development,
+            self.koi_body,
+            &self.koi_anatomy,
+            &swim_pose,
+            Framing::At(pose_center),
+            Some(&self.lap),
+        )
+    }
 }
 
 /// Where the view is centered: on the koi itself for the still image, or at a point
@@ -119,13 +198,13 @@ struct HoverFit {
 
 /// Center a hovering loop on everything the koi covers across its frames, then shrink
 /// the drift on each axis only as far as needed to keep every frame inside the frame.
-fn fit_hover_loop(behavior: Behavior, koi_anatomy: &KoiAnatomy) -> HoverFit {
+fn fit_hover_loop(pond_size: PondSize, behavior: Behavior, koi_anatomy: &KoiAnatomy) -> HoverFit {
     // Room for the outline, a clear pixel at the frame edge, and rounding.
     const FIT_MARGIN_PIXELS: f64 = 2.5;
     let frame_bounds: Vec<([[f64; 2]; 2], [f64; 2])> = (0..frame_count(behavior))
         .map(|frame_index| {
             let swim_pose = calculate_swim_pose(behavior, frame_index);
-            let body_spine = build_spine(koi_anatomy, &swim_pose);
+            let body_spine = build_spine(koi_anatomy, &swim_pose, None);
             let fin_curves = build_fins(&body_spine, koi_anatomy, &swim_pose);
             let [mut min_corner, mut max_corner] = measure_curve_bounds(&body_spine, &fin_curves);
             // A whisker point covers the pixel to its right and below.
@@ -146,8 +225,8 @@ fn fit_hover_loop(behavior: Behavior, koi_anatomy: &KoiAnatomy) -> HoverFit {
         })
         .collect();
     let frame_sizes = [
-        f64::from(FRAME_WIDTH_PIXELS),
-        f64::from(FRAME_HEIGHT_PIXELS),
+        f64::from(pond_size.width_pixels()),
+        f64::from(pond_size.height_pixels()),
     ];
     let mut hover_fit = HoverFit {
         sweep_center: [0.0; 2],
@@ -183,16 +262,18 @@ fn fit_hover_loop(behavior: Behavior, koi_anatomy: &KoiAnatomy) -> HoverFit {
 }
 
 fn render_pose(
+    pond_size: PondSize,
     koi_development: &KoiDevelopment,
     koi_body: KoiBody,
     koi_anatomy: &KoiAnatomy,
     swim_pose: &SwimPose,
     framing: Framing,
+    lap: Option<&Lap>,
 ) -> KoiFrame {
     let koi_coat = KoiCoat::new(koi_development, koi_body, |along_fraction| {
         calculate_body_half_width(along_fraction, koi_anatomy)
     });
-    let body_spine = build_spine(koi_anatomy, swim_pose);
+    let body_spine = build_spine(koi_anatomy, swim_pose, lap);
     let fin_curves = build_fins(&body_spine, koi_anatomy, swim_pose);
     let [min_corner, max_corner] = measure_curve_bounds(&body_spine, &fin_curves);
     let pose_center = match framing {
@@ -206,12 +287,14 @@ fn render_pose(
         koi_anatomy,
         koi_coat: &koi_coat,
     };
-    let mut rgba_pixels = Vec::with_capacity((FRAME_WIDTH_PIXELS * FRAME_HEIGHT_PIXELS) as usize);
-    for pixel_y in 0..FRAME_HEIGHT_PIXELS {
-        for pixel_x in 0..FRAME_WIDTH_PIXELS {
+    let mut rgba_pixels = Vec::with_capacity(pond_size.pixel_count());
+    for pixel_y in 0..pond_size.height_pixels() {
+        for pixel_x in 0..pond_size.width_pixels() {
             let sample_position = [
-                f64::from(pixel_x) + 0.5 - f64::from(FRAME_WIDTH_PIXELS) / 2.0 + pose_center[0],
-                f64::from(pixel_y) + 0.5 - f64::from(FRAME_HEIGHT_PIXELS) / 2.0 + pose_center[1],
+                f64::from(pixel_x) + 0.5 - f64::from(pond_size.width_pixels()) / 2.0
+                    + pose_center[0],
+                f64::from(pixel_y) + 0.5 - f64::from(pond_size.height_pixels()) / 2.0
+                    + pose_center[1],
             ];
             // Nothing outside the curves' bounds can be covered, so skip sampling it.
             let is_inside_bounds = (0..2).all(|axis_index| {
@@ -232,6 +315,7 @@ fn render_pose(
         }
     }
     paint_mouth(
+        pond_size,
         &mut rgba_pixels,
         &body_spine,
         koi_body,
@@ -244,10 +328,11 @@ fn render_pose(
         .collect();
     let whisker_points =
         calculate_whisker_points(&body_spine, koi_anatomy, swim_pose.whisker_sway_radians);
-    paint_whiskers(&mut rgba_pixels, &whisker_points, pose_center);
-    paint_outline(&mut rgba_pixels);
+    paint_whiskers(pond_size, &mut rgba_pixels, &whisker_points, pose_center);
+    paint_outline(pond_size, &mut rgba_pixels);
     if let Some(feeding_phase) = swim_pose.feeding_phase {
         paint_feeding(
+            pond_size,
             &mut rgba_pixels,
             &body_spine,
             koi_anatomy,
@@ -256,9 +341,17 @@ fn render_pose(
         );
     }
     if swim_pose.depth > 0.0 {
-        paint_depth(&mut rgba_pixels, &fish_pixel_mask, swim_pose.depth);
+        paint_depth(
+            pond_size,
+            &mut rgba_pixels,
+            &fish_pixel_mask,
+            swim_pose.depth,
+        );
     }
-    KoiFrame { rgba_pixels }
+    KoiFrame {
+        pond_size,
+        rgba_pixels,
+    }
 }
 
 /// Where the mouth opens: on the snout's center line, just inside its front.
@@ -277,6 +370,7 @@ fn calculate_mouth_position(body_spine: &[CurvePoint]) -> [f64; 2] {
 /// It is painted before the outline, so it is outlined like the koi, and a mostly
 /// closed mouth paints nothing.
 fn paint_mouth(
+    pond_size: PondSize,
     rgba_pixels: &mut [[u8; 4]],
     body_spine: &[CurvePoint],
     koi_body: KoiBody,
@@ -300,16 +394,17 @@ fn paint_mouth(
     );
     let mouth_world = calculate_mouth_position(body_spine);
     let frame_sizes = [
-        f64::from(FRAME_WIDTH_PIXELS),
-        f64::from(FRAME_HEIGHT_PIXELS),
+        f64::from(pond_size.width_pixels()),
+        f64::from(pond_size.height_pixels()),
     ];
     let mouth = [0, 1].map(|axis_index| {
         mouth_world[axis_index] - pose_center[axis_index] + frame_sizes[axis_index] / 2.0
     });
     let rim_color = koi_body.select_mouth_rim_color();
-    let frame_width = FRAME_WIDTH_PIXELS as usize;
+    let frame_width = pond_size.width_pixels() as usize;
     let first_y = (mouth[1] - radius_pixels).floor().max(0.0) as usize;
-    let last_y = ((mouth[1] + radius_pixels).ceil() as usize).min(FRAME_HEIGHT_PIXELS as usize - 1);
+    let last_y =
+        ((mouth[1] + radius_pixels).ceil() as usize).min(pond_size.height_pixels() as usize - 1);
     let first_x = (mouth[0] - radius_pixels).floor().max(0.0) as usize;
     let last_x = ((mouth[0] + radius_pixels).ceil() as usize).min(frame_width - 1);
     for pixel_y in first_y..=last_y {
@@ -332,6 +427,7 @@ fn paint_mouth(
 /// to it, drawn on the water around the koi. Where the frame edge leaves too little
 /// room, both shrink toward the mouth instead of running off the edge.
 fn paint_feeding(
+    pond_size: PondSize,
     rgba_pixels: &mut [[u8; 4]],
     body_spine: &[CurvePoint],
     koi_anatomy: &KoiAnatomy,
@@ -352,8 +448,8 @@ fn paint_feeding(
     // A clear pixel between the extras and the frame edge, plus rounding.
     const EDGE_MARGIN_PIXELS: f64 = 2.0;
     let frame_sizes = [
-        f64::from(FRAME_WIDTH_PIXELS),
-        f64::from(FRAME_HEIGHT_PIXELS),
+        f64::from(pond_size.width_pixels()),
+        f64::from(pond_size.height_pixels()),
     ];
     let mouth_world = calculate_mouth_position(body_spine);
     let mouth = [0, 1].map(|axis_index| {
@@ -365,7 +461,7 @@ fn paint_feeding(
             .max(0.0)
     });
     let forward_direction = calculate_forward_direction(body_spine, 0);
-    let frame_width = FRAME_WIDTH_PIXELS as usize;
+    let frame_width = pond_size.width_pixels() as usize;
     let mut paint_water = |point: [f64; 2], color: [u8; 4], dither_limit: f64| {
         let [pixel_x, pixel_y] = point.map(f64::floor);
         if !(0.0..frame_sizes[0]).contains(&pixel_x) || !(0.0..frame_sizes[1]).contains(&pixel_y) {
@@ -432,7 +528,12 @@ fn paint_feeding(
 /// Under water the koi becomes a blue koi: each body and fin pixel maps its own
 /// brightness onto a water-blue scale, the whiskers and outline soften to deep blue,
 /// and a dithered share of each drops out, more for the outline.
-fn paint_depth(rgba_pixels: &mut [[u8; 4]], fish_pixel_mask: &[bool], depth: f64) {
+fn paint_depth(
+    pond_size: PondSize,
+    rgba_pixels: &mut [[u8; 4]],
+    fish_pixel_mask: &[bool],
+    depth: f64,
+) {
     const DEEP_WATER: [f64; 3] = [18.0, 78.0, 137.0];
     const MID_WATER: [f64; 3] = [0.0, 153.0, 219.0];
     const SHALLOW_WATER: [f64; 3] = [190.0, 225.0, 245.0];
@@ -441,7 +542,7 @@ fn paint_depth(rgba_pixels: &mut [[u8; 4]], fish_pixel_mask: &[bool], depth: f64
     const OUTLINE_DROPOUT_PER_DEPTH: f64 = 0.45;
     const TINT_PER_DEPTH: f64 = 1.15;
     let tint = (depth * TINT_PER_DEPTH).min(1.0);
-    let frame_width = FRAME_WIDTH_PIXELS as usize;
+    let frame_width = pond_size.width_pixels() as usize;
     for (pixel_index, pixel_channels) in rgba_pixels.iter_mut().enumerate() {
         if pixel_channels[3] == 0 {
             continue;
@@ -726,8 +827,16 @@ fn smooth_step(fraction: f64) -> f64 {
 }
 
 /// The spine follows the pose's course: the still pose's fixed heading and gentle bend,
-/// turned by any heading offset, or a clockwise circle around the frame center.
-fn build_spine(koi_anatomy: &KoiAnatomy, swim_pose: &SwimPose) -> Vec<CurvePoint> {
+/// turned by any heading offset, or the pond's lap.
+///
+/// # Panics
+///
+/// If the pose laps and no lap is given.
+fn build_spine(
+    koi_anatomy: &KoiAnatomy,
+    swim_pose: &SwimPose,
+    lap: Option<&Lap>,
+) -> Vec<CurvePoint> {
     const HEADING_RADIANS: f64 = -0.08;
     const BEND_RADIANS: f64 = 0.35;
     const WAVE_AMPLITUDE_FRACTION: f64 = 0.06;
@@ -764,19 +873,13 @@ fn build_spine(koi_anatomy: &KoiAnatomy, swim_pose: &SwimPose) -> Vec<CurvePoint
             }
             center_points
         }
-        // Each body point sits one pixel of arc behind the one in front.
+        // Each body point sits one pixel of lap behind the one in front.
         Course::Lap { angle_radians } => {
-            let radius_pixels = calculate_lap_radius(body_length_pixels);
+            let lap = lap.expect("a lapping pose swims a lap");
             (0..point_count)
-                .map(|point_index| {
-                    let point_angle_radians = angle_radians - point_index as f64 / radius_pixels;
-                    CurvePoint {
-                        position: [
-                            radius_pixels * point_angle_radians.cos(),
-                            radius_pixels * point_angle_radians.sin(),
-                        ],
-                        half_width_pixels: calculate_point_half_width(point_index),
-                    }
+                .map(|point_index| CurvePoint {
+                    position: lap.position_behind(angle_radians, point_index as f64),
+                    half_width_pixels: calculate_point_half_width(point_index),
                 })
                 .collect()
         }
@@ -902,15 +1005,21 @@ fn build_fin(
 
 /// Paint the whisker points. They fill only empty pixels and are painted before the
 /// outline, so they are outlined like the koi.
-fn paint_whiskers(rgba_pixels: &mut [[u8; 4]], whisker_points: &[[f64; 2]], pose_center: [f64; 2]) {
-    let frame_width = FRAME_WIDTH_PIXELS as usize;
+fn paint_whiskers(
+    pond_size: PondSize,
+    rgba_pixels: &mut [[u8; 4]],
+    whisker_points: &[[f64; 2]],
+    pose_center: [f64; 2],
+) {
+    let frame_width = pond_size.width_pixels() as usize;
     for whisker_point in whisker_points {
         let pixel_x =
-            (whisker_point[0] - pose_center[0] + f64::from(FRAME_WIDTH_PIXELS) / 2.0).floor();
-        let pixel_y =
-            (whisker_point[1] - pose_center[1] + f64::from(FRAME_HEIGHT_PIXELS) / 2.0).floor();
-        if !(0.0..f64::from(FRAME_WIDTH_PIXELS)).contains(&pixel_x)
-            || !(0.0..f64::from(FRAME_HEIGHT_PIXELS)).contains(&pixel_y)
+            (whisker_point[0] - pose_center[0] + f64::from(pond_size.width_pixels()) / 2.0).floor();
+        let pixel_y = (whisker_point[1] - pose_center[1]
+            + f64::from(pond_size.height_pixels()) / 2.0)
+            .floor();
+        if !(0.0..f64::from(pond_size.width_pixels())).contains(&pixel_x)
+            || !(0.0..f64::from(pond_size.height_pixels())).contains(&pixel_y)
         {
             continue;
         }
@@ -964,19 +1073,6 @@ fn calculate_whisker_length(koi_anatomy: &KoiAnatomy) -> u32 {
     (koi_anatomy.body_length_pixels / BODY_PIXELS_PER_WHISKER_PIXEL)
         .round()
         .clamp(3.0, 5.0) as u32
-}
-
-/// The lap circle's radius: as wide as the frame allows, tighter for longer koi so the
-/// whole fish stays inside, and never so tight that the body covers more than its
-/// share of the circle.
-fn calculate_lap_radius(body_length_pixels: f64) -> f64 {
-    const FRAME_REACH_PIXELS: f64 = 116.0;
-    const OUTER_REACH_FRACTION: f64 = 0.33;
-    const MAX_LAP_RADIUS_PIXELS: f64 = 88.0;
-    const MAX_BODY_SHARE_OF_LAP: f64 = 0.6;
-    (FRAME_REACH_PIXELS - OUTER_REACH_FRACTION * body_length_pixels)
-        .min(MAX_LAP_RADIUS_PIXELS)
-        .max(body_length_pixels / (TAU * MAX_BODY_SHARE_OF_LAP))
 }
 
 /// The corners of the box that holds every curve, including its half widths.
@@ -1197,9 +1293,9 @@ fn calculate_forward_direction(curve_points: &[CurvePoint], point_index: usize) 
     ]
 }
 
-fn paint_outline(rgba_pixels: &mut [[u8; 4]]) {
+fn paint_outline(pond_size: PondSize, rgba_pixels: &mut [[u8; 4]]) {
     let original_pixels = rgba_pixels.to_vec();
-    let frame_width = FRAME_WIDTH_PIXELS as usize;
+    let frame_width = pond_size.width_pixels() as usize;
     for (pixel_index, pixel_channels) in rgba_pixels.iter_mut().enumerate() {
         if original_pixels[pixel_index][3] != 0 {
             continue;
@@ -1209,7 +1305,7 @@ fn paint_outline(rgba_pixels: &mut [[u8; 4]]) {
         let touches_shape = (pixel_x > 0 && original_pixels[pixel_index - 1][3] != 0)
             || (pixel_x + 1 < frame_width && original_pixels[pixel_index + 1][3] != 0)
             || (pixel_y > 0 && original_pixels[pixel_index - frame_width][3] != 0)
-            || (pixel_y + 1 < FRAME_HEIGHT_PIXELS as usize
+            || (pixel_y + 1 < pond_size.height_pixels() as usize
                 && original_pixels[pixel_index + frame_width][3] != 0);
         if touches_shape {
             *pixel_channels = OUTLINE_COLOR;
@@ -1256,10 +1352,11 @@ mod tests {
     /// Paint only the mouth on an empty canvas centered on it.
     fn paint_mouth_alone(koi_body: KoiBody, mouth_opening: f64) -> Vec<[u8; 4]> {
         let koi_anatomy = calculate_anatomy(1_500);
-        let body_spine = build_spine(&koi_anatomy, &STILL_POSE);
+        let body_spine = build_spine(&koi_anatomy, &STILL_POSE, None);
         let mut rgba_pixels = vec![[0; 4]; (FRAME_WIDTH_PIXELS * FRAME_HEIGHT_PIXELS) as usize];
         let mouth_position = calculate_mouth_position(&body_spine);
         paint_mouth(
+            PondSize::default(),
             &mut rgba_pixels,
             &body_spine,
             koi_body,

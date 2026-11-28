@@ -202,11 +202,11 @@ fn generate_library(output_directory: &Path) -> Result<(), Box<dyn Error>> {
         }
     }
     write_overviews(output_directory, "markings", &marking_frames)?;
-    write_artifact(
-        output_directory,
-        "README.md",
-        format!("{}\n", index_markdown.trim_end()).as_bytes(),
-    )?;
+    fs::write(
+        output_directory.join("README.md"),
+        format!("{}\n", index_markdown.trim_end()),
+    )
+    .map_err(|write_error| format!("README.md: {write_error}"))?;
     Ok(())
 }
 
@@ -315,13 +315,11 @@ fn render_sample(
 ) -> Result<KoiFrame, Box<dyn Error>> {
     let koi_frame = render_koi(koi_development, koi_body);
     let file_name = format!("{file_stem}.png");
-    write_artifact(output_directory, &file_name, &encode_png(&koi_frame)?)?;
+    fs::write(output_directory.join(&file_name), encode_png(&koi_frame)?)
+        .map_err(|write_error| format!("{file_name}: {write_error}"))?;
     let svg_name = format!("{file_stem}.svg");
-    write_artifact(
-        output_directory,
-        &svg_name,
-        encode_svg(&koi_frame).as_bytes(),
-    )?;
+    fs::write(output_directory.join(&svg_name), encode_svg(&koi_frame))
+        .map_err(|write_error| format!("{svg_name}: {write_error}"))?;
     index_markdown.push_str(&format!(
         "### {heading}\n\n![{file_stem}]({file_name})\n\n[SVG]({svg_name})\n\n"
     ));
@@ -336,11 +334,12 @@ fn write_overviews(
     for (background_name, background_color) in
         [("light", [255, 255, 255, 255]), ("dark", [13, 17, 23, 255])]
     {
-        write_artifact(
-            output_directory,
-            &format!("{overview_name}-{background_name}.png"),
-            &encode_overview(rendered_frames, background_color)?,
-        )?;
+        let file_name = format!("{overview_name}-{background_name}.png");
+        fs::write(
+            output_directory.join(&file_name),
+            encode_overview(rendered_frames, background_color)?,
+        )
+        .map_err(|write_error| format!("{file_name}: {write_error}"))?;
     }
     Ok(())
 }
@@ -418,18 +417,4 @@ fn encode_overview(
     png_writer.write_image_data(&overview_pixels)?;
     png_writer.finish()?;
     Ok(png_bytes)
-}
-
-fn write_artifact(
-    output_directory: &Path,
-    file_name: &str,
-    file_bytes: &[u8],
-) -> Result<(), Box<dyn Error>> {
-    let output_path = output_directory.join(file_name);
-    let temporary_path = output_path.with_extension("tmp");
-    fs::write(&temporary_path, file_bytes)
-        .map_err(|write_error| format!("{file_name}: {write_error}"))?;
-    fs::rename(temporary_path, output_path)
-        .map_err(|rename_error| format!("{file_name}: {rename_error}"))?;
-    Ok(())
 }

@@ -60,15 +60,17 @@ cargo run --locked --example generate-library -- library
 
 When a change alters how the koi looks, copy `library/bodies-light.png` and
 `library/bodies-dark.png` into `docs/` so the README's sheet matches the code.
+The koi library workflow fails until they match.
 
 ## Releasing
 
 A release is a version tag, and the release workflow does the rest.
 
-1. Set `version` in [Cargo.toml](Cargo.toml) and run `cargo build --locked` so
-   `Cargo.lock` follows. Move the Unreleased entries in
-   [CHANGELOG.md](CHANGELOG.md) under a heading for the version with the day's
-   date, and keep the link references at the bottom current.
+1. Set `version` in [Cargo.toml](Cargo.toml) and run `cargo build --offline` so
+   `Cargo.lock` follows; `--locked` would refuse to change it. Move the
+   Unreleased entries in [CHANGELOG.md](CHANGELOG.md) under a heading for the
+   version with the day's date, and keep the link references at the bottom
+   current.
 2. Merge that through a pull request, then tag the merge commit `vX.Y.Z` and
    push the tag.
 

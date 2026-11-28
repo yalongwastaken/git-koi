@@ -6,6 +6,31 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `git-koi render --size WIDTHxHEIGHT` draws the koi in a pond of any size, each
+  side at least 256 native pixels and the area at most 2048 by 256, and
+  `--scale N` exports it at 1 through 4 pixels per native pixel instead of 2. In
+  a pond that is not square the koi swims a new track each day, an oval or a
+  figure-eight swum either way round, with loop-the-loops and S-wiggles; a
+  longer track makes a longer loop at the same pace. Without the options, every
+  file is drawn exactly as before. The Action takes them as the `size` and
+  `scale` inputs, and the library as `pond::PondSize`, `render::SwimLoop`,
+  `output::ExportScale`, and the `_scaled` encoders.
+- The Action runs on Windows runners, downloading and checking the release's
+  `.zip` (#36).
+
+### Changed
+
+- `git-koi render` prints nothing when it succeeds. The line it printed named
+  the behavior, date, and body, which `preview.html` already shows (#43).
+
+### Fixed
+
+- When GitHub's contribution calendar leaves out a day or reports one twice,
+  `git-koi collect` says so and asks to try again, instead of naming a repair
+  only the author of a snapshot file can make (#56).
+
 ## [1.0.2] - 2026-10-31
 
 ### Fixed
