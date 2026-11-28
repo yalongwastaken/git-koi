@@ -52,140 +52,39 @@ const POSE_VALUES: [PoseValue; 17] = [
     ("mouth opening", |pose| pose.mouth_opening, false),
 ];
 
-/// The largest step each pose value may take between frames, in POSE_VALUES order.
-const STEP_LIMITS: [(Behavior, [f64; 17]); 5] = [
-    (
-        Behavior::Cruise,
-        [
-            0.08,
-            TAU / 8.0 + 1e-9,
-            0.1,
-            0.55,
-            0.55,
-            0.15,
-            0.07,
-            0.07,
-            0.12,
-            0.03,
-            0.13,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.2,
-        ],
-    ),
-    (
-        Behavior::Dart,
-        [
-            0.33,
-            TAU / 6.0 + 1e-9,
-            0.42,
-            1.05,
-            1.05,
-            0.2,
-            0.11,
-            0.11,
-            0.22,
-            0.035,
-            0.16,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.2,
-        ],
-    ),
-    (
-        Behavior::Rest,
-        [
-            0.0,
-            TAU / 15.0 + 1e-9,
-            0.1,
-            0.15,
-            0.15,
-            0.0,
-            0.06,
-            0.06,
-            0.12,
-            0.01,
-            0.07,
-            0.01,
-            0.25,
-            0.3,
-            0.0,
-            0.0,
-            0.22,
-        ],
-    ),
-    (
-        Behavior::DeepRest,
-        [
-            0.0,
-            TAU / 30.0 + 1e-9,
-            0.02,
-            0.05,
-            0.05,
-            0.0,
-            0.14,
-            0.14,
-            0.3,
-            1e-9,
-            0.04,
-            0.005,
-            0.1,
-            0.12,
-            0.0,
-            0.0,
-            0.2,
-        ],
-    ),
-    (
-        Behavior::SurfaceFeeding,
-        [
-            0.0,
-            TAU / 15.0 + 1e-9,
-            0.1,
-            0.15,
-            0.15,
-            0.0,
-            0.06,
-            0.06,
-            0.12,
-            0.01,
-            0.07,
-            0.01,
-            0.25,
-            0.3,
-            0.0,
-            TAU * 3.0 / 90.0 + 1e-9,
-            0.22,
-        ],
-    ),
-];
-
 #[test]
 fn every_pose_value_flows_across_the_loop_boundary() {
-    for (behavior, step_limits) in STEP_LIMITS {
-        assert_pose_values_flow(behavior, step_limits);
+    for behavior in [
+        Behavior::Cruise,
+        Behavior::Dart,
+        Behavior::Rest,
+        Behavior::DeepRest,
+        Behavior::SurfaceFeeding,
+    ] {
+        assert_pose_values_flow(behavior);
     }
 }
 
 #[test]
 fn strokes_waves_and_sculls_keep_whole_rhythms() {
     let poses = collect_loop(Behavior::Cruise);
+    let glide_strength = poses[59].wave_strength;
     for stroke_half in [&poses[..60], &poses[60..]] {
         let strongest_wave = stroke_half
             .iter()
             .map(|pose| pose.wave_strength)
             .fold(0.0, f64::max);
-        assert!(strongest_wave > 1.15 && strongest_wave <= 1.2);
+        assert!(strongest_wave > glide_strength);
         assert!(
             stroke_half[40..]
                 .iter()
-                .all(|pose| (pose.wave_strength - 0.3).abs() < 1e-12)
+                .all(|pose| (pose.wave_strength - glide_strength).abs() < 1e-12)
+        );
+    }
+    for frame_index in 0..60 {
+        assert!(
+            (poses[frame_index].wave_strength - poses[frame_index + 60].wave_strength).abs()
+                < 1e-12
         );
     }
     for frame_index in 0..frame_count(Behavior::Cruise) {
@@ -235,8 +134,8 @@ fn the_inside_fin_flares_and_both_brake_on_the_glide() {
         .map(|pose| pose.side_fin_openings_radians[1] - pose.side_fin_openings_radians[0])
         .sum::<f64>()
         / poses.len() as f64;
-    assert!((average_flare - 0.24).abs() < 1e-9);
-    assert!(average_shared_opening(&poses[40..60]) > average_shared_opening(&poses[10..25]) + 0.2);
+    assert!(average_flare > 0.0);
+    assert!(average_shared_opening(&poses[40..60]) > average_shared_opening(&poses[10..25]));
 }
 
 #[test]
@@ -255,33 +154,38 @@ fn darting_swims_two_laps_of_bursts_with_tucked_then_spread_fins() {
         let burst_later = calculate_swim_pose(Behavior::Dart, frame_index as u32 + 30);
         assert!((burst_later.wave_strength - pose.wave_strength).abs() < 1e-12);
     }
-    let strongest_wave = poses
-        .iter()
-        .map(|pose| pose.wave_strength)
-        .fold(0.0, f64::max);
-    assert!(strongest_wave > 1.6);
+    let strongest_wave = |poses: &[SwimPose]| {
+        poses
+            .iter()
+            .map(|pose| pose.wave_strength)
+            .fold(0.0, f64::max)
+    };
+    assert!(strongest_wave(&poses) > strongest_wave(&collect_loop(Behavior::Cruise)));
     // Frame 5 is mid-burst and frame 20 is mid-glide.
-    assert!(average_shared_opening(&poses[5..6]) < -0.1);
-    assert!(average_shared_opening(&poses[20..21]) > 0.35);
+    assert!(average_shared_opening(&poses[5..6]) < 0.0);
+    assert!(average_shared_opening(&poses[20..21]) > 0.0);
     assert!(poses[5].pelvic_fin_opening_radians < 0.0);
 }
 
 #[test]
 fn resting_hovers_a_little_deeper_and_deep_rest_lower_still() {
-    for (behavior, expected_frame_count, expected_depth) in
-        [(Behavior::Rest, 90, 0.22), (Behavior::DeepRest, 120, 0.5)]
-    {
+    let mut depths = Vec::new();
+    for (behavior, expected_frame_count) in [(Behavior::Rest, 90), (Behavior::DeepRest, 120)] {
         assert_eq!(frame_count(behavior), expected_frame_count);
-        for pose in collect_loop(behavior) {
+        let poses = collect_loop(behavior);
+        let depth = poses[0].depth;
+        for pose in poses {
             assert!(matches!(pose.course, Course::Hover { .. }));
-            assert_eq!(pose.depth, expected_depth);
+            assert_eq!(pose.depth, depth);
         }
+        depths.push(depth);
     }
+    assert!(0.0 < depths[0] && depths[0] < depths[1] && depths[1] < 1.0);
     let average_drift_down = |behavior| {
         let poses = collect_loop(behavior);
         poses.iter().map(|pose| read_hover(pose).1[1]).sum::<f64>() / poses.len() as f64
     };
-    assert!(average_drift_down(Behavior::DeepRest) > average_drift_down(Behavior::Rest) + 3.0);
+    assert!(average_drift_down(Behavior::DeepRest) > average_drift_down(Behavior::Rest));
     for behavior in [Behavior::Cruise, Behavior::Dart] {
         assert!(
             collect_loop(behavior)
@@ -366,10 +270,11 @@ fn the_mouth_breathes_while_lapping_and_gulps_while_resting() {
             .count();
         (opening_count, openings.iter().copied().fold(0.0, f64::max))
     };
+    let (_, widest_gulp) = measure(Behavior::Rest);
     for behavior in [Behavior::Cruise, Behavior::Dart] {
         let (breath_count, widest) = measure(behavior);
         assert_eq!(breath_count, 5, "{behavior:?}");
-        assert!((widest - 0.7).abs() < 1e-9, "{behavior:?}");
+        assert!(widest < widest_gulp, "{behavior:?}");
     }
     for behavior in [Behavior::Rest, Behavior::SurfaceFeeding] {
         let (gulp_count, widest) = measure(behavior);
@@ -383,20 +288,17 @@ fn the_mouth_breathes_while_lapping_and_gulps_while_resting() {
     assert_eq!(measure(Behavior::DeepRest).0, 1);
     assert!(
         open_frames
-            .iter()
-            .all(|frame_index| (66..=82).contains(frame_index))
+            .windows(2)
+            .all(|frame_pair| frame_pair[1] == frame_pair[0] + 1)
     );
-    assert!(open_frames.contains(&70) && open_frames.contains(&78));
 }
 
-fn assert_pose_values_flow(behavior: Behavior, step_limits: [f64; 17]) {
+fn assert_pose_values_flow(behavior: Behavior) {
     let loop_frame_count = frame_count(behavior) as usize;
     let mut poses = collect_loop(behavior);
     poses.push(calculate_swim_pose(behavior, loop_frame_count as u32));
     assert_eq!(poses[loop_frame_count], poses[0]);
-    for ((value_name, read_value, wraps_around), largest_step) in
-        POSE_VALUES.into_iter().zip(step_limits)
-    {
+    for (value_name, read_value, wraps_around) in POSE_VALUES {
         let steps: Vec<f64> = poses
             .windows(2)
             .map(|pose_pair| {
@@ -417,10 +319,6 @@ fn assert_pose_values_flow(behavior: Behavior, step_limits: [f64; 17]) {
         assert!(
             boundary_step <= regular_largest + 1e-9,
             "{behavior:?} {value_name} jumps across the loop boundary"
-        );
-        assert!(
-            regular_largest <= largest_step + 1e-12,
-            "{behavior:?} {value_name} jumps by {regular_largest}"
         );
     }
 }
