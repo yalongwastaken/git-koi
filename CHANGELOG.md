@@ -31,6 +31,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `git-koi collect` says so and asks to try again, instead of naming a repair
   only the author of a snapshot file can make (#56).
 
+### Security
+
+- The Action runs the downloaded binary only after GitHub's attestation shows
+  this repository's release workflow built it from the version's tag, and it
+  downloads from this repository whatever `Cargo.toml` names. Releases are
+  published immutable, and the crate is published only from a protected
+  environment (#57, #58, #59).
+
 ## [1.0.2] - 2026-10-31
 
 ### Fixed

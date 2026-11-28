@@ -45,7 +45,9 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
       run: |
         version=$(grep -m1 '^version' "$GITHUB_ACTION_PATH/Cargo.toml" | cut -d'"' -f2)
-        repository=$(grep -m1 '^repository' "$GITHUB_ACTION_PATH/Cargo.toml" | cut -d'"' -f2)
+        # Written here rather than read from Cargo.toml, so a change to the crate's
+        # metadata cannot send the download, or its verification, anywhere else.
+        repository=yalongwastaken/git-koi
         case "$RUNNER_OS-$RUNNER_ARCH" in
           Linux-X64) target=x86_64-unknown-linux-musl ;;
           Linux-ARM64) target=aarch64-unknown-linux-musl ;;
@@ -65,7 +67,7 @@ runs:
         install_dir="$RUNNER_TEMP/git-koi"
         mkdir -p "$install_dir"
         if ! gh release download "v$version" --repo "$repository" --dir "$install_dir" \
-            --pattern "$archive" --pattern "$archive.sha256"; then
+            --pattern "$archive" --pattern "$archive.sha256" --pattern "$archive.sigstore.json"; then
           echo "release v$version has no asset $archive; reference the Action at a release tag" >&2
           exit 1
         fi
@@ -74,6 +76,17 @@ runs:
           sha256sum -c "$archive.sha256"
         else
           shasum -a 256 -c "$archive.sha256"
+        fi
+        # The checksum comes from the same release as the archive, so it proves only
+        # the download. The attestation proves this repository's release workflow
+        # built the archive from the version's tag on a GitHub-hosted runner. Its
+        # signature, not where the bundle came from, is what is trusted, and reading
+        # it from disk needs neither the attestation API nor any token permission.
+        if ! gh attestation verify "$archive" --bundle "$archive.sigstore.json" --repo "$repository" \
+            --signer-workflow "$repository/.github/workflows/release.yml" \
+            --source-ref "refs/tags/v$version" --deny-self-hosted-runners > /dev/null; then
+          echo "$archive was not built by $repository's release workflow from v$version; not running it" >&2
+          exit 1
         fi
         case "$archive" in
           *.zip) unzip -q "$archive" ;;
