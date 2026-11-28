@@ -67,7 +67,7 @@ runs:
         install_dir="$RUNNER_TEMP/git-koi"
         mkdir -p "$install_dir"
         if ! gh release download "v$version" --repo "$repository" --dir "$install_dir" \
-            --pattern "$archive" --pattern "$archive.sha256"; then
+            --pattern "$archive" --pattern "$archive.sha256" --pattern "$archive.sigstore.json"; then
           echo "release v$version has no asset $archive; reference the Action at a release tag" >&2
           exit 1
         fi
@@ -79,8 +79,10 @@ runs:
         fi
         # The checksum comes from the same release as the archive, so it proves only
         # the download. The attestation proves this repository's release workflow
-        # built the archive from the version's tag on a GitHub-hosted runner.
-        if ! gh attestation verify "$archive" --repo "$repository" \
+        # built the archive from the version's tag on a GitHub-hosted runner. Its
+        # signature, not where the bundle came from, is what is trusted, and reading
+        # it from disk needs neither the attestation API nor any token permission.
+        if ! gh attestation verify "$archive" --bundle "$archive.sigstore.json" --repo "$repository" \
             --signer-workflow "$repository/.github/workflows/release.yml" \
             --source-ref "refs/tags/v$version" --deny-self-hosted-runners > /dev/null; then
           echo "$archive was not built by $repository's release workflow from v$version; not running it" >&2

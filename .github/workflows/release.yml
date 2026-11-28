@@ -91,9 +91,18 @@ jobs:
           fi
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
       - name: Attest the archive's build provenance
+        id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.package.outputs.archive }}
+      # The signed bundle ships beside the archive, so the Action verifies it
+      # without calling the attestation API and needs no extra token permission.
+      - name: Keep the attestation bundle beside the archive
+        shell: bash
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE" "$ARCHIVE.sigstore.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.target }}
@@ -101,6 +110,7 @@ jobs:
             git-koi-*.tar.gz
             git-koi-*.zip
             git-koi-*.sha256
+            git-koi-*.sigstore.json
           if-no-files-found: error
 
   release:
