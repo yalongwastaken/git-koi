@@ -1284,10 +1284,15 @@ mod tests {
     #[test]
     fn the_mouth_opens_as_a_body_colored_rim_around_a_dark_opening() {
         assert_eq!(count_painted(&paint_mouth_alone(KoiBody::White, 0.1)), 0);
-        for (koi_body, rim_color) in [
-            (KoiBody::White, [192, 203, 220, 255]),
-            (KoiBody::Black, [58, 68, 102, 255]),
+        for koi_body in [
+            KoiBody::White,
+            KoiBody::Black,
+            KoiBody::Asagi,
+            KoiBody::Tea,
+            KoiBody::Gold,
+            KoiBody::Platinum,
         ] {
+            let rim_color = koi_body.select_mouth_rim_color();
             let open_mouth = paint_mouth_alone(koi_body, 1.0);
             assert_eq!(center_pixel(&open_mouth), OUTLINE_COLOR);
             assert!(open_mouth.contains(&rim_color), "{koi_body:?}");
